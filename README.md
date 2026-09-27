@@ -44,13 +44,16 @@ Matched against Apple's own product photography, not from memory:
   horizontal SDXC slot, grouped low on the left; status LED low on the right.
   Every opening is a real boolean recess with a socket built wall-by-wall
   (bright metal walls, shadowed back plate, contact tongue).
-- **Rear** — recessed connector bay (0.85 cm deep) holding, left to right:
-  power inlet, 4× Thunderbolt 5 (USB-C), 2× USB-A, HDMI 2.1, 10Gb Ethernet
-  (RJ-45), 3.5 mm headphone jack.
-- **Underside** — perforated honeycomb ventilation plate (genuine geometry:
-  one quad ring per hole, 8-gon openings, not a texture), four rubber feet,
-  and the Touch ID power button.
-- **Top / sides** — plain, no logo, no vents.
+- **Rear** — recessed connector bay (0.85 cm deep) holding, left to right as
+  you face the back of the machine: 4× Thunderbolt 5 (USB-C), 10Gb Ethernet
+  (RJ-45), power inlet, 2× USB-A, HDMI 2.1, 3.5 mm headphone jack. Order and
+  membership follow Apple's "Take a Tour of Mac Studio" guide.
+- **Underside** — a shallow **perforated band around the lower perimeter**
+  (1.6 cm tall on a 9.5 cm body, ~17%), with small round holes in staggered
+  rows and a solid lip below it. Genuine geometry: 1,253 individual tube
+  meshes, not a texture. Plus four rubber feet and the Touch ID power button.
+- **Top / sides** — plain, with no logo, text, or vents. The current enclosure
+  has no top marking; the 2014–2020 shell carried an Apple logo.
 
 Materials: Principled BSDF throughout — silver `Metallic 1.0 / Roughness 0.19`,
 dark anodised grille, matte black cavity, rubber feet, emissive status LED.
@@ -175,6 +178,18 @@ than an error.
    nothing to reflect, so the bounce cards are load-bearing, not decoration.
 10. **Bounce cards and the floor must be excluded from bbox measurement** or
     they swamp the product bounds (a 40 cm card next to a 19.7 cm product).
+11. **A rounded-rect path's corner ARC CENTRES are inset by the radius.** For a
+    rectangle of half-extent `hx` with corner radius `r`, the corner circle is
+    centred at `(hx - r, 0)` — not `(hx, 0)`. Using the edge midpoint as the
+    centre pushes the entire path `r` outward and inflates the bbox by exactly
+    that amount, which is maddening to spot in a render.
+12. **Never Solidify an open per-hole ring to make a perforation.** Solidify
+    offsets along the surface normal, which points outward on a ring laid on a
+    vertical face, and the mesh ends up ~1.5 cm proud of the skin. Build each
+    hole as a closed tube instead.
+13. **Budget a perforated band's Z extent before placing holes.** Tube depth
+    plus row spacing must fit between the foot line and the band top, or the
+    lowest holes drop below the feet and Z grows by the overshoot.
 
 ## Known deviations
 

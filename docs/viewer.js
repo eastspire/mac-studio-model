@@ -107,9 +107,13 @@ function classify(name) {
 }
 
 const loader = new GLTFLoader();
+// The Draco decoder is served from this origin, not a CDN. A CDN fetch here is
+// a hard dependency for the model to appear at all: if unpkg is slow or
+// blocked, the GLB never decodes and the viewer sits on the loading screen
+// forever with no error.
 const draco = new DRACOLoader();
-draco.setDecoderPath('https://unpkg.com/three@0.169.0/examples/jsm/libs/draco/');
-draco.setDecoderConfig({ type: 'js' });
+draco.setDecoderPath('draco/');
+draco.setDecoderConfig({ type: 'wasm' });
 loader.setDRACOLoader(draco);
 
 loader.load(
@@ -143,8 +147,15 @@ loader.load(
     animate();
   },
   (evt) => {
-    if (evt.lengthComputable && evt.total) {
-      loading.textContent = `加载模型… ${Math.round(evt.loaded / evt.total * 100)}%`;
+    // Only trust the percentage when the browser reports a real total.
+    // A Draco-compressed GLB streams through several fetches, and
+    // lengthComputable is false for most of them — dividing by an unset
+    // total yields nonsense like "568%".
+    if (evt.lengthComputable && evt.total > 0) {
+      const pct = Math.min(100, Math.round(evt.loaded / evt.total * 100));
+      loading.innerHTML = `<span class="spinner"></span>加载模型… ${pct}%`;
+    } else if (evt.loaded > 0) {
+      loading.innerHTML = `<span class="spinner"></span>加载模型… ${(evt.loaded / 1048576).toFixed(1)} MB`;
     }
   },
   (err) => {
@@ -152,6 +163,16 @@ loader.load(
     console.error(err);
   }
 );
+
+// A silent hang is worse than an error: if the GLB or the Draco decoder never
+// arrives, the viewer would otherwise sit on the loading screen indefinitely
+// with no explanation. Give it 45 s, then say so.
+setTimeout(() => {
+  if (loading.style.display !== 'none') {
+    loading.innerHTML =
+      '模型加载超时（45 秒）<br><small>GLB 或 Draco 解码器未能加载。<br>请检查网络后刷新。</small>';
+  }
+}, 45000);
 
 /** Duplicate every mesh as a wireframe overlay (hidden by default). */
 function buildWireframe(root) {

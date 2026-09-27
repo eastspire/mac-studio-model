@@ -42,7 +42,7 @@ bld.build_front_io(mats, body)
 lo2, hi2 = bounds(body)
 print("after front_io  minY=%+.4f maxY=%+.4f" % (lo2.y, hi2.y))
 bld.build_bottom_details(mats)
-bld.build_grille_plate(mats)
+bld.build_grille_band(mats)
 bld.build_studio(bpy.context.scene)
 
 lo = Vector((1e9,) * 3)

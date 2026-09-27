@@ -271,49 +271,172 @@ def add_cylinder(name, cx, cy, cz, r, h, mat, verts=48, axis="Z"):
     return obj
 
 
-# ------------------------------------------------------- perforated bottom plate
-def build_grille_plate(mats, pitch=0.30, hole_r=0.085, seg=8):
-    """Flat plate with genuine perforations; one 8-quad cell per grid position."""
-    z_top = FOOT_H + 0.045
-    nx = int(16.4 / pitch)
-    ny = nx
-    x0, y0 = -nx * pitch / 2.0, -ny * pitch / 2.0
-    half = pitch / 2.0
+# ------------------------------------------------------- perforated base band
+# The real Mac Studio does NOT have a grille across the whole bottom. It has a
+# shallow perforated band running around the lower perimeter — roughly 1.1 cm
+# tall on a 9.5 cm body (~12%), with a solid lip below it and the perforated
+# field wrapping around the front and side corners. Holes are small circles in
+# staggered rows, not hexagons. (Verified against Apple's own product photos:
+# the front face is smooth silver above this band.)
+GRILLE_H = 1.60    # height of the perforated band
+GRILLE_Z0 = 1.70   # band top; below it is the smooth solid lip
+GRILLE_PITCH = 0.22
+GRILLE_HOLE_R = 0.058
 
-    outer = [  # CCW, corners then edge midpoints -> tiles with its neighbours
-        (half, half), (0.0, half), (-half, half), (-half, 0.0),
-        (-half, -half), (0.0, -half), (half, -half), (half, 0.0),
-    ]
-    inner = [
-        (hole_r * math.cos(2 * math.pi * k / seg), hole_r * math.sin(2 * math.pi * k / seg))
+
+def build_grille_band(mats, pitch=GRILLE_PITCH, hole_r=GRILLE_HOLE_R, seg=10):
+    """Perforated band wrapping the lower perimeter, as real geometry.
+
+    Each hole is a short *closed* cylinder punched into a recessed band panel.
+    Building them as tubes rather than as quads + Solidify matters: Solidify on
+    an open per-hole ring extends along the surface normal, which points
+    outward on this geometry and shoves the mesh ~1.5 cm past the skin,
+    corrupting the bounding box.
+
+    A staggered lattice (odd rows offset by half a pitch) matches the real
+    part's appearance, and the band wraps the front and both side corners.
+    """
+    z_top = GRILLE_Z0
+    depth = 0.22                       # how far each tube reaches into the body
+    # Rows must fit between the foot line (FOOT_H) and the band top, and the
+    # tube depth must not push a hole below FOOT_H — anything under the feet
+    # inflates Z.
+    z_bot = FOOT_H + depth + 0.04
+    rows = max(1, int((z_top - 0.16 - z_bot) / (pitch * 0.86)))
+    row_dz = (z_top - 0.16 - z_bot) / max(1, rows - 1) if rows > 1 else 0.0
+    z_mid = z_top - 0.16
+    inset = hole_r + 0.05              # keep every tube inside the skin
+    hx, hy = W / 2.0 - inset, D / 2.0 - inset
+    r = R_VERT - inset
+
+    ring = [
+        (math.cos(2 * math.pi * k / seg), math.sin(2 * math.pi * k / seg))
         for k in range(seg)
     ]
-    # remap outer to 8 phases aligned with the inner octagon
-    outer = [
-        (half, 0.0),
-        (half * 0.7071, half * 0.7071), (0.0, half),
-        (-half * 0.7071, half * 0.7071), (-half, 0.0),
-        (-half * 0.7071, -half * 0.7071), (0.0, -half),
-        (half * 0.7071, -half * 0.7071),
-    ]
+
+    # dense sample of the rounded-rect path, plus cumulative arc length.
+    # Corner ARC CENTRES are inset by r from the edge midpoints: a corner of a
+    # rounded rect at half-extent hx with radius r is centred at (hx - r, 0).
+    # Using (hx, 0) as the centre pushes the whole path r outward and inflates
+    # the bounding box by that amount.
+    perim, acc = [], [0.0]
+    steps = 1440
+    for i in range(steps):
+        t = (i / steps) * 4.0
+        edge = int(t)
+        u = t - edge
+        a = [(hx - r, 0.0, 0.00),
+             (0.0, hy - r, 0.25),
+             (-hx + r, 0.0, 0.50),
+             (0.0, -hy + r, 0.75)][edge]
+        b = [(0.0, hy - r, 0.25),
+             (-hx + r, 0.0, 0.50),
+             (0.0, -hy + r, 0.75),
+             (hx - r, 0.0, 1.00)][edge]
+        p0 = (a[0] + r * math.cos(2 * math.pi * a[2]),
+              a[1] + r * math.sin(2 * math.pi * a[2]))
+        p1 = (b[0] + r * math.cos(2 * math.pi * b[2]),
+              b[1] + r * math.sin(2 * math.pi * b[2]))
+        perim.append((p0[0] + (p1[0] - p0[0]) * u, p0[1] + (p1[1] - p0[1]) * u))
+    for i in range(1, len(perim)):
+        ax, ay = perim[i - 1]
+        bx, by = perim[i]
+        acc.append(acc[-1] + math.hypot(bx - ax, by - ay))
+    total = acc[-1]
+
+    def point_at(s):
+        lo, hi = 0, len(acc) - 1
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if acc[mid] < s:
+                lo = mid + 1
+            else:
+                hi = mid
+        px, py = perim[lo]
+        nx_, ny_ = perim[(lo + 1) % len(perim)]
+        dx, dy = nx_ - px, ny_ - py
+        ln = math.hypot(dx, dy) or 1.0
+        return px, py, dx / ln, dy / ln
 
     verts, faces = [], []
-    for iy in range(ny):
-        for ix in range(nx):
-            cx = x0 + (ix + 0.5) * pitch
-            cy = y0 + (iy + 0.5) * pitch
+    placed = 0
+    for row in range(rows):
+        z0 = z_mid - row * row_dz
+        s = (pitch / 2.0) if row % 2 else 0.0
+        while s < total:
+            px, py, tx, ty = point_at(s)
+            rx, ry = -ty, tx                 # outward normal
             base = len(verts)
-            verts.extend((cx + px, cy + py, z_top) for px, py in outer)
-            verts.extend((cx + px, cy + py, z_top) for px, py in inner)
+            # front ring (at the band surface) and back ring (inside the body)
+            for oz in (0.0, -depth):
+                for ox, oy in ring:
+                    verts.append((px + rx * (ox * hole_r) + tx * (oy * hole_r),
+                                  py + ry * (ox * hole_r) + ty * (oy * hole_r),
+                                  z0 + oz))
             for k in range(seg):
                 k2 = (k + 1) % seg
+                # outer wall
                 faces.append((base + k, base + k2, base + seg + k2, base + seg + k))
+                # inner wall, reversed so the tube is a closed solid
+                faces.append((base + 2 * seg + k2, base + 2 * seg + k,
+                              base + 3 * seg + k, base + 3 * seg + k2))
+            # end caps
+            for k in range(seg):
+                k2 = (k + 1) % seg
+                faces.append((base + k2, base + k,
+                              base + 2 * seg + k, base + 2 * seg + k2))
+                faces.append((base + seg + k, base + seg + k2,
+                              base + 3 * seg + k2, base + 3 * seg + k))
+            placed += 1
+            s += pitch
 
-    obj = simple_mesh("BottomGrille", verts, faces, mats["grille"])
-    sol = obj.modifiers.new("Solidify", "SOLIDIFY")
-    sol.thickness = 0.10
-    sol.offset = -1.0
+    obj = simple_mesh("BottomGrille", verts, faces, mats["grille"], smooth=True)
+
+    # Recessed band panel behind the holes. It is set INWARD from the tube
+    # rings so the dark hole mouths stand proud of it and stay visible from
+    # below — a panel flush with the rings just reads as a solid dark plate.
+    skin = R_VERT
+    panel_inset = inset + hole_r + 0.10
+    phx, phy = W / 2.0 - panel_inset, D / 2.0 - panel_inset
+    pr = skin - panel_inset
+    panel = build_band_panel(
+        mats, rounded_rect_path(phx, phy, pr), z_bot, z_top, mats["cavity"])
+    panel.name = "GrilleBacking"
+    print("grille: %d holes in %d rows, band z %.2f..%.2f cm"
+          % (placed, rows, FOOT_H, z_top))
     return obj
+
+
+def rounded_rect_path(hx, hy, r, steps=720):
+    """Sample a rounded rectangle. Corner arc centres are inset by r."""
+    pts = []
+    corners = ((hx - r, hy - r, 0.00), (-hx + r, hy - r, 0.25),
+               (-hx + r, -hy + r, 0.50), (hx - r, -hy + r, 0.75))
+    for i in range(steps):
+        t = (i / steps) * 4.0
+        e = int(t)
+        u = t - e
+        a, b = corners[e], corners[(e + 1) % 4]
+        p0 = (a[0] + r * math.cos(2 * math.pi * a[2]),
+              a[1] + r * math.sin(2 * math.pi * a[2]))
+        p1 = (b[0] + r * math.cos(2 * math.pi * b[2]),
+              b[1] + r * math.sin(2 * math.pi * b[2]))
+        pts.append((p0[0] + (p1[0] - p0[0]) * u, p0[1] + (p1[1] - p0[1]) * u))
+    return pts
+
+
+def build_band_panel(mats, perim, z_lo, z_hi, mat):
+    """Thin skirt wrapping the perimeter between two heights."""
+    ring = [perim[i] for i in range(0, len(perim), 8)]
+    verts, faces = [], []
+    for px, py in ring:
+        verts.append((px, py, z_lo))
+        verts.append((px, py, z_hi))
+    m = len(ring)
+    for i in range(m):
+        j = (i + 1) % m
+        faces.append((2 * i, 2 * j, 2 * j + 1, 2 * i + 1))
+    return simple_mesh("BandPanel_%.2f" % z_lo, verts, faces, mat, smooth=True)
 
 
 def add_socket(name, x, z, w, h, y_mouth, mats, depth=0.30, wall=0.05, inward=1.0):
@@ -371,26 +494,30 @@ def build_rear_io(mats):
                   bay_x * 2.0, bay_depth + 0.20, bay_z1 - bay_z0,
                   bevel=0.35, mats=mats)
 
-    # every socket mouth sits 0.45cm inside the bay opening, so the whole
-    # connector is visibly recessed rather than flush with the panel.
-    # The rear panel is at +D/2, so "into the enclosure" is decreasing y.
+    # Rear port order follows Apple's "Take a Tour of Mac Studio" guide, which
+    # lists the back view left-to-right as: Thunderbolt 5 x4, 10 Gigabit
+    # Ethernet, power port, USB-A x2, HDMI, 3.5 mm audio jack.
+    #
+    # That guide's "back view" is the machine seen from behind, which is the -Y
+    # direction in this model — so the guide's left-to-right is the NEGATIVE of
+    # our +X. Mirror the x coordinates or the row comes out reversed.
     y_mouth = y_face - 0.45
     parts = [
-        # (name, x, width, height)
-        ("PowerInlet", -7.90, 1.05, 0.62),
-        ("TB5_1", -5.90, 0.95, 0.30),
-        ("TB5_2", -4.00, 0.95, 0.30),
-        ("TB5_3", -2.10, 0.95, 0.30),
-        ("TB5_4", -0.20, 0.95, 0.30),
-        ("USBA_1", 1.80, 1.40, 0.58),
-        ("USBA_2", 3.40, 1.40, 0.58),
-        ("HDMI", 5.20, 1.50, 0.46),
-        ("RJ45", 6.95, 1.45, 1.35),
+        # (name, x, width, height) in MODEL space. Apple's guide order is
+        # mirrored into this axis (see note above).
+        ("TB5_1", 7.55, 0.92, 0.30),
+        ("TB5_2", 6.05, 0.92, 0.30),
+        ("TB5_3", 4.55, 0.92, 0.30),
+        ("TB5_4", 3.05, 0.92, 0.30),
+        ("RJ45", 0.95, 1.45, 1.32),
+        ("PowerInlet", -1.05, 1.05, 0.60),
+        ("USBA_1", -3.05, 1.40, 0.56),
+        ("USBA_2", -4.60, 1.40, 0.56),
+        ("HDMI", -6.30, 1.50, 0.44),
     ]
     for name, x, w, h in parts:
         add_socket("Port_" + name, x, zc, w, h, y_mouth, mats, inward=-1.0)
-
-    add_round_socket("Port_Headphone", 8.35, zc, 0.30, y_mouth, mats, inward=-1.0)
+    add_round_socket("Port_Headphone", -8.05, zc, 0.29, y_mouth, mats, inward=-1.0)
 
 
 def build_front_io(mats, body):
@@ -403,10 +530,14 @@ def build_front_io(mats, body):
     """
     y_face = -D / 2.0
     zc = 2.55
+    # Apple's guide shows the FRONT view as seen from in front of the machine,
+    # which is the -Y side here — the same mirror situation as the rear. The
+    # guide lists USB-C, USB-C, SDXC left to right, so in model space they run
+    # from +X to -X.
     slots = [
-        ("Front_USBC_1", -7.40, 0.32, 0.90),
-        ("Front_USBC_2", -6.40, 0.32, 0.90),
-        ("Front_SDXC", -4.70, 1.30, 0.34),
+        ("Front_USBC_1", 7.40, 0.32, 0.90),
+        ("Front_USBC_2", 6.40, 0.32, 0.90),
+        ("Front_SDXC", 4.70, 1.30, 0.34),
     ]
     for name, x, w, h in slots:
         # Straddling convention: outer face 0.10cm proud of the skin, inner
@@ -423,7 +554,9 @@ def build_front_io(mats, body):
                    inward=1.0)
 
     # status LED: shallow bore plus a real, lit lens
-    cut_from_body(body, "Front_LED", 7.60, y_face - 0.10 + 0.30, zc, 0.24, 0.60, 0.24,
+    # The guide puts the status light on the opposite side from the USB-C
+    # cluster, so it mirrors to -X here.
+    cut_from_body(body, "Front_LED", -7.60, y_face + 0.20, zc, 0.24, 0.60, 0.24,
                   bevel=0.08, mats=mats)
     led = bpy.data.materials["Status_LED"]
     led_bsdf = next(n for n in led.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
@@ -431,13 +564,13 @@ def build_front_io(mats, body):
     led_bsdf.inputs["Emission Strength"].default_value = 6.0
     led_bsdf.inputs["Base Color"].default_value = (0.9, 0.95, 1.0, 1.0)
     # lens sits 0.16cm inside the bore mouth, flush enough to be visible
-    lens = add_cylinder("Front_LED", 7.60, y_face + 0.16, zc, 0.085, 0.04, led,
+    lens = add_cylinder("Front_LED", -7.60, y_face + 0.16, zc, 0.085, 0.04, led,
                         verts=24, axis="Y")
     # small point light so the LED actually spills onto the surrounding panel
     ld = bpy.data.lights.new("LEDglow", "POINT")
     ld.energy, ld.color, ld.shadow_soft_size = 2.5, (0.75, 0.88, 1.0), 0.12
     glow = bpy.data.objects.new("LEDglow", ld)
-    glow.location = (7.60, y_face - 0.10, zc)
+    glow.location = (-7.60, y_face - 0.10, zc)
     bpy.context.collection.objects.link(glow)
     return lens
 
@@ -589,7 +722,7 @@ def main():
     build_rear_io(mats)
     build_front_io(mats, body)
     build_bottom_details(mats)
-    build_grille_plate(mats)
+    build_grille_band(mats)
     build_studio(scene)
 
     lo, hi, size = evaluated_bbox()

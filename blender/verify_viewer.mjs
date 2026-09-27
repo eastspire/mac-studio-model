@@ -38,11 +38,28 @@ add('GLTFLoader loads mac-studio.glb', glb && glb[1] === 'mac-studio.glb', glb ?
 
 // 5. Draco decoder path is configured and matches what three ships
 const dp = src.match(/setDecoderPath\(['"]([^'"]+)['"]/);
-add('DRACOLoader decoder path set', !!dp, dp ? dp[1] : '');
+add('DRACOLoader decoder path is local (no CDN dependency)',
+    !!dp && !/^https?:/.test(dp[1]), dp ? dp[1] : 'not set');
+// every local asset the viewer requests must exist on disk
+import { existsSync } from 'node:fs';
+const root = '/Users/sqs/code/mac-studio-model/docs/';
+const localDeps = [
+  ...(src.match(/setDecoderPath\(['"]([^'"]+)['"]\)/g) || [])
+    .map(s => s.match(/['"]([^'"]+)['"]/)[1]),
+  ...(src.match(/loader\.load\(\s*['"]([^'"]+)['"]/g) || [])
+    .map(s => s.match(/['"]([^'"]+)['"]/)[1]),
+];
+const missingFiles = localDeps.filter(d => !/^https?:/.test(d) && !existsSync(root + d));
+add('local viewer dependencies exist on disk', missingFiles.length === 0,
+    missingFiles.length ? 'missing: ' + missingFiles.join(', ') : localDeps.join(' '));
 const unused = [...src.matchAll(/^import \{ (\w+) \} from/gm)].map(m => m[1])
   .filter(n => (src.match(new RegExp('\\b' + n + '\\b', 'g')) || []).length < 2);
 add('no unused imports', unused.length === 0, unused.length ? unused.join(', ') : '');
-add('decoder type js (works without wasm fetch)', /type:\s*['"]js['"]/.test(src));
+add('decoder type wasm (faster, and the .wasm is vendored)',
+    /type:\s*['"]wasm['"]/.test(src) && existsSync(root + 'draco/draco_decoder.wasm'));
+add('loading progress cannot exceed 100%',
+    /Math\.min\(100/.test(src));
+add('loader has a hang timeout', /setTimeout\([\s\S]{0,200}45000/.test(src));
 
 // 6. the 8 named views exist
 const views = src.match(/const VIEWS = \[([\s\S]*?)\n\];/);

@@ -37,6 +37,9 @@ VIEWS = [
     ("06_bottom", 270.0, -62.0, 62.0, 0.5, True),
     ("07_front_closeup", 270.0, 4.0, 90.0, 0.28, False),
     ("08_rear_closeup", 90.0, 16.0, 90.0, 0.45, False),
+    # grazing view along the base band, the only angle that actually shows
+    # the perforations — from straight below they are edge-on
+    ("09_grille_band", 250.0, -12.0, 95.0, 0.16, False),
 ]
 
 
