@@ -4,7 +4,9 @@ A dimensionally exact, procedurally generated model of the current-generation
 aluminium **Mac Studio**, built with Blender's Python API (`bpy`) and driven
 headlessly.
 
-![hero](renders/04_hero.png)
+**Live site:** <https://eastspire.github.io/mac-studio-model/>
+
+![hero](docs/images/04_hero.jpg)
 
 ## Verified dimensions
 
@@ -64,10 +66,19 @@ blender/
   cut_trace.py          per-cut bbox trace (diagnostic)
   rear_trace.py         rear-bay cut trace (diagnostic)
   build_trace.py        full-build stage trace (diagnostic)
-renders/                8 rendered views, 1500x1125, Cycles 96 samples
-reference/              Apple product photos used for the fidelity check
-mac_studio.blend
+docs/                   GitHub Pages site (published from /docs)
+  index.html            single-file page: dimensions, gallery, gotchas
+  style.css
+  images/               8 renders, web-optimised (1600px progressive JPEG)
+  thumbs/               720px gallery thumbnails
+mac_studio.blend        generated; not committed (see .gitignore)
+renders/                12 MB of full-resolution PNG; not committed
+reference/              Apple photos used for the fidelity check; not committed
 ```
+
+The repo is ~450 KB: the committed site images total 0.3 MB. The 12 MB of
+full-resolution Cycles PNGs, the 3.4 MB `.blend`, and the Apple reference
+photos are all gitignored — regenerate them with the two commands below.
 
 ## Reproducing
 
