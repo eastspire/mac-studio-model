@@ -13,7 +13,6 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
 const viewport = document.getElementById('viewport');
 const loading = document.getElementById('loading');
