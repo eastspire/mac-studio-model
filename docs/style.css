@@ -64,7 +64,29 @@ code {
   border-radius: 4px;
 }
 
+.cta {
+  display: inline-block;
+  margin-top: 18px;
+  padding: 11px 22px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 550;
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.cta:hover { opacity: 0.88; transform: translateY(-1px); }
+
 .hero { margin: 8px 0 72px; }
+
+.hero figcaption {
+  font-size: 14px;
+  color: var(--ink-soft);
+  margin-top: 12px;
+  text-align: center;
+}
 
 .hero img {
   width: 100%;

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mac Studio — 交互式 3D 查看器</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+
+<header>
+  <h1>Mac&nbsp;Studio</h1>
+  <p class="sub">交互式 3D 查看器 · 1:1 建模 · 尺寸已验证 ±0.000&nbsp;mm</p>
+  <p class="back"><a href="../">&larr; 项目说明</a></p>
+</header>
+
+<div id="viewport">
+  <div id="loading"><span class="spinner"></span>加载模型…</div>
+</div>
+
+<div id="panel">
+  <div class="group">
+    <h3>视角</h3>
+    <div class="btns" id="views"></div>
+  </div>
+
+  <div class="group">
+    <h3>显示</h3>
+    <label class="chk"><input type="checkbox" id="tGrille" checked> 底部蜂窝格栅</label>
+    <label class="chk"><input type="checkbox" id="tPorts" checked> 接口</label>
+    <label class="chk"><input type="checkbox" id="tFeet" checked> 脚垫 / 电源键</label>
+    <label class="chk"><input type="checkbox" id="tGrid"> 显示地面网格</label>
+    <label class="chk"><input type="checkbox" id="tWire"> 线框叠加</label>
+  </div>
+
+  <div class="group">
+    <h3>剖切</h3>
+    <label class="chk"><input type="checkbox" id="clipOn"> 启用剖切平面</label>
+    <div class="axis" id="clipAxis">
+      <button data-axis="x" class="on">X</button>
+      <button data-axis="y">Y</button>
+      <button data-axis="z">Z</button>
+    </div>
+    <input type="range" id="clipPos" min="-100" max="100" value="0">
+    <output id="clipVal">0.0 cm</output>
+  </div>
+
+  <div class="group">
+    <h3>材质</h3>
+    <label class="slider">
+      <span>粗糙度 <output id="roughVal">0.19</output></span>
+      <input type="range" id="rough" min="0" max="100" value="19">
+    </label>
+    <label class="slider">
+      <span>金属度 <output id="metalVal">1.00</output></span>
+      <input type="range" id="metal" min="0" max="100" value="100">
+    </label>
+    <label class="slider">
+      <span>环境光 <output id="envVal">1.00</output></span>
+      <input type="range" id="env" min="0" max="200" value="100">
+    </label>
+    <label class="slider">
+      <span>曝光 <output id="expVal">1.00</output></span>
+      <input type="range" id="exposure" min="20" max="250" value="100">
+    </label>
+    <button class="btn wide" id="reset">重置</button>
+  </div>
+
+  <div class="group">
+    <h3>测量</h3>
+    <div class="dims" id="dims">
+      <div><span>宽 X</span><b>19.70 cm</b></div>
+      <div><span>深 Y</span><b>19.70 cm</b></div>
+      <div><span>高 Z</span><b>9.50 cm</b></div>
+    </div>
+    <p class="note">几何包围盒 19.7000 × 19.7000 × 9.5000 cm</p>
+  </div>
+
+  <p class="hint">左键旋转 · 滚轮缩放 · 右键平移</p>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="viewer.js"></script>
+
+</body>
+</html>
