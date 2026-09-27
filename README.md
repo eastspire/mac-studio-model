@@ -5,6 +5,7 @@ aluminium **Mac Studio**, built with Blender's Python API (`bpy`) and driven
 headlessly.
 
 **Live site:** <https://eastspire.github.io/mac-studio-model/>
+**Interactive viewer:** <https://eastspire.github.io/mac-studio-model/viewer.html>
 
 ![hero](docs/images/04_hero.jpg)
 
@@ -60,6 +61,7 @@ dark anodised grille, matte black cavity, rubber feet, emissive status LED.
 blender/
   build_mac_studio.py   geometry + materials + studio lighting, writes the .blend
   render_views.py       loads the .blend, frames and renders 8 views
+  export_gltf.py        exports the .blend to Draco-compressed GLB for the viewer
   verify.py             dimension check -> VERIFY_OK / VERIFY_FAIL
   inspect_bbox.py       per-object bounds report
   bool_sweep.py         boolean-solver parameter probe (diagnostic)
@@ -67,8 +69,12 @@ blender/
   rear_trace.py         rear-bay cut trace (diagnostic)
   build_trace.py        full-build stage trace (diagnostic)
 docs/                   GitHub Pages site (published from /docs)
-  index.html            single-file page: dimensions, gallery, gotchas
+  index.html            project page: dimensions, gallery, gotchas
+  viewer.html           interactive WebGL viewer (three.js)
+  viewer.js             orbit nav, clipping planes, live PBR controls
+  viewer.css
   style.css
+  mac-studio.glb        0.40 MB Draco GLB, 84 meshes / 51,840 tris, real scale
   images/               8 renders, web-optimised (1600px progressive JPEG)
   thumbs/               720px gallery thumbnails
 mac_studio.blend        generated; not committed (see .gitignore)
@@ -76,9 +82,36 @@ renders/                12 MB of full-resolution PNG; not committed
 reference/              Apple photos used for the fidelity check; not committed
 ```
 
-The repo is ~450 KB: the committed site images total 0.3 MB. The 12 MB of
-full-resolution Cycles PNGs, the 3.4 MB `.blend`, and the Apple reference
-photos are all gitignored — regenerate them with the two commands below.
+The repo is ~1.2 MB. The 12 MB of full-resolution Cycles PNGs, the 3.4 MB
+`.blend`, and the Apple reference photos are all gitignored — regenerate them
+with the commands below.
+
+## Interactive viewer
+
+<https://eastspire.github.io/mac-studio-model/viewer.html>
+
+A three.js viewer over the exported geometry, for inspecting the model rather
+than just looking at renders:
+
+- **Orbit / zoom / pan**, with 8 named camera views (keys `1`–`8`)
+- **Clipping planes** on X, Y, or Z — slice the body open to inspect the port
+  cavities and the underside grille from the inside
+- **Per-part visibility** for the grille, connectors, and feet, plus a
+  wireframe overlay
+- **Live PBR controls** for roughness, metalness, environment intensity, and
+  tone-mapping exposure
+
+The GLB is authored in **metres** (Blender centimetres × 0.01), so the model is
+at true real-world scale in the viewer. Draco compression takes it from 9.1 MB
+to 0.40 MB; `viewer.js` loads the decoder from a CDN.
+
+Rebuild the GLB after any geometry change:
+
+```bash
+blender --background --python blender/export_gltf.py
+npx gltf-pipeline -i docs/mac-studio.glb -o docs/mac-studio.draco.glb -d
+mv docs/mac-studio.draco.glb docs/mac-studio.glb
+```
 
 ## Reproducing
 
