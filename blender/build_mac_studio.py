@@ -103,8 +103,8 @@ def rounded_rect(hx, hy, r, seg=ARC_SEG, edge_sub=4):
     return ring
 
 
-def cut_from_body(body, name, cx, cy, cz, sx, sy, sz, bevel=0.0, mats=None):
-    """Boolean-difference a rounded box out of the shell — a real recess.
+def boolean_diff(body, cutter, label="Cut"):
+    """Apply an EXACT boolean difference and drop the cutter.
 
     The body MUST already be triangulated (see triangulate_caps): the lofted
     shell's top/bottom caps are large non-planar n-gons, and the EXACT solver
@@ -113,18 +113,26 @@ def cut_from_body(body, name, cx, cy, cz, sx, sy, sz, bevel=0.0, mats=None):
     the cutter's overhang instead of shrinking.
     """
     triangulate_caps(body)
-    cutter = add_box("_cut_" + name, cx, cy, cz, sx, sy, sz,
-                     (mats or {}).get("cavity") or bpy.data.materials["Cavity_Black"],
-                     bevel=bevel)
     bpy.context.view_layer.objects.active = body
     for o in bpy.context.selected_objects:
         o.select_set(False)
     body.select_set(True)
-    mod = body.modifiers.new("Cut_" + name, "BOOLEAN")
+    mod = body.modifiers.new(label, "BOOLEAN")
     mod.operation, mod.object, mod.solver = "DIFFERENCE", cutter, "EXACT"
-    bpy.ops.object.modifier_apply(modifier="Cut_" + name)
+    bpy.ops.object.modifier_apply(modifier=label)
     bpy.data.objects.remove(cutter, do_unlink=True)
     return body
+
+
+def cut_from_body(body, name, cx, cy, cz, sx, sy, sz, bevel=0.0, mats=None):
+    """Boolean-difference a rounded box out of the shell — a real recess.
+
+    See boolean_diff for why the body has to be triangulated first.
+    """
+    cutter = add_box("_cut_" + name, cx, cy, cz, sx, sy, sz,
+                     (mats or {}).get("cavity") or bpy.data.materials["Cavity_Black"],
+                     bevel=bevel)
+    return boolean_diff(body, cutter, "Cut_" + name)
 
 
 def triangulate_caps(obj):
@@ -157,12 +165,27 @@ def fillet_inset(z, z_lo, z_hi):
 
 
 def build_body(mats):
-    """Lofted rounded box: exact 19.7 x 19.7 footprint, 9.5 tall incl. feet."""
+    """Lofted rounded box: exact 19.7 x 19.7 footprint, 9.5 tall incl. feet.
+
+    The perforated band around the lower perimeter is a genuine recess in this
+    loft, not a boolean cut: `grille_inset` pulls the profile inboard across
+    the band height so the groove is part of the surface from the start. A
+    boolean was the obvious approach and it fought back three separate ways —
+    a cutter tangent to the skin cuts nothing, a cutter buried inside the shell
+    cuts nothing, and a cutter proud of the skin leaves the difference as new
+    geometry and inflates the bounding box by the overshoot (+1.16 mm). None of
+    those failures is visible from the vertex count or the bbox alone.
+    """
     z_lo, z_hi = FOOT_H, H_TOTAL
+    z_g0, z_g1 = GRILLE_BAND_Z0, GRILLE_BAND_Z1
+
     levels = []
     steps = 8
     for i in range(steps + 1):                       # bottom fillet
         levels.append(z_lo + R_HORZ * (1.0 - math.cos(math.pi / 2 * i / steps)))
+    # the band gets its own close-spaced levels so the recess has crisp walls
+    for i in range(GRILLE_LEVELS + 1):
+        levels.append(z_g0 + (z_g1 - z_g0) * i / GRILLE_LEVELS)
     levels.append(z_lo + (z_hi - z_lo) / 2.0)         # straight band
     for i in range(steps + 1):                       # top fillet
         levels.append(z_hi - R_HORZ * (1.0 - math.cos(math.pi / 2 * i / steps)))
@@ -170,7 +193,7 @@ def build_body(mats):
     verts, faces, mats_per_face = [], [], []
     hx, hy = W / 2.0, D / 2.0
     for z in levels:
-        d = fillet_inset(z, z_lo, z_hi)
+        d = fillet_inset(z, z_lo, z_hi) + grille_inset(z)
         for px, py in rounded_rect(hx - d, hy - d, R_VERT - d):
             verts.append((px, py, z))
 
@@ -282,12 +305,34 @@ GRILLE_H = 1.60    # height of the perforated band
 GRILLE_Z0 = 1.70   # band top; below it is the smooth solid lip
 GRILLE_PITCH = 0.22
 GRILLE_HOLE_R = 0.058
+GRILLE_RECESS = 0.14   # how deep the band groove is cut into the shell
+
+# The groove is modelled directly into the body loft, so these describe the
+# recess the hole tubes sit in. Kept separate from GRILLE_Z0/H because the
+# builder owns the exact span; the tube builder only needs the floor depth.
+GRILLE_BAND_Z0 = 0.42   # groove floor
+GRILLE_BAND_Z1 = 1.62   # groove ceiling (a 0.08 cm lip of flat skin above)
+GRILLE_LEVELS = 4       # extra loft levels across the band, for crisp walls
 
 
-def build_grille_band(mats, pitch=GRILLE_PITCH, hole_r=GRILLE_HOLE_R, seg=10):
+def grille_inset(z):
+    """Extra profile inset at height `z` — the perforated band's recess.
+
+    Steps rather than ramps: the real part has a flat groove floor and a sharp
+    upper edge, not a chamfer.
+    """
+    if z < GRILLE_BAND_Z0 - 1e-6 or z > GRILLE_BAND_Z1 + 1e-6:
+        return 0.0
+    return GRILLE_RECESS
+
+
+def build_grille_band(mats, body, pitch=GRILLE_PITCH, hole_r=GRILLE_HOLE_R, seg=10):
     """Perforated band wrapping the lower perimeter, as real geometry.
 
-    Each hole is a short *closed* cylinder punched into a recessed band panel.
+    Each hole is a short *closed* cylinder punched radially inward from the
+    band's outer surface, the band being a real opening in the shell rather
+    than a dark decal sitting on it.
+
     Building them as tubes rather than as quads + Solidify matters: Solidify on
     an open per-hole ring extends along the surface normal, which points
     outward on this geometry and shoves the mesh ~1.5 cm past the skin,
@@ -295,9 +340,19 @@ def build_grille_band(mats, pitch=GRILLE_PITCH, hole_r=GRILLE_HOLE_R, seg=10):
 
     A staggered lattice (odd rows offset by half a pitch) matches the real
     part's appearance, and the band wraps the front and both side corners.
+
+    A solid skirt panel must NOT be wrapped around the band, and the tubes must
+    start ON the skin rather than inboard of it: a continuous face in front of
+    the holes hides every one of them, and tubes buried inside the shell are
+    invisible. The band then reads as smooth metal in both failure modes.
     """
     z_top = GRILLE_Z0
-    depth = 0.22                       # how far each tube reaches into the body
+    # Tube geometry: ring centres sit on the GROOVE FLOOR (inset by the recess
+    # depth) and the barrel runs OUTWARD to the original skin, so the mouths
+    # are flush with the surrounding surface and the bores are genuinely open.
+    # A tube that stops short leaves a lip of skin in front of every hole; one
+    # that overshoots pokes past the shell and inflates the bounding box.
+    depth = GRILLE_RECESS
     # Rows must fit between the foot line (FOOT_H) and the band top, and the
     # tube depth must not push a hole below FOOT_H — anything under the feet
     # inflates Z.
@@ -305,7 +360,11 @@ def build_grille_band(mats, pitch=GRILLE_PITCH, hole_r=GRILLE_HOLE_R, seg=10):
     rows = max(1, int((z_top - 0.16 - z_bot) / (pitch * 0.86)))
     row_dz = (z_top - 0.16 - z_bot) / max(1, rows - 1) if rows > 1 else 0.0
     z_mid = z_top - 0.16
-    inset = hole_r + 0.05              # keep every tube inside the skin
+    # Hole tubes start at the groove floor and reach OUTWARD to the skin, so
+    # their mouths sit flush with the recessed band and the bores are genuinely
+    # open. `inset` is the recess depth: an inset ring at the skin leaves an
+    # unbroken wall in front of every hole, which is invisible in a render.
+    inset = GRILLE_RECESS
     hx, hy = W / 2.0 - inset, D / 2.0 - inset
     r = R_VERT - inset
 
@@ -315,29 +374,23 @@ def build_grille_band(mats, pitch=GRILLE_PITCH, hole_r=GRILLE_HOLE_R, seg=10):
     ]
 
     # dense sample of the rounded-rect path, plus cumulative arc length.
-    # Corner ARC CENTRES are inset by r from the edge midpoints: a corner of a
-    # rounded rect at half-extent hx with radius r is centred at (hx - r, 0).
-    # Using (hx, 0) as the centre pushes the whole path r outward and inflates
-    # the bounding box by that amount.
+    #
+    # Reuse the body's own rounded_rect so the cutter matches the shell
+    # exactly. Two failure modes this replaces:
+    #
+    # * Corner ARC CENTRES are inset by r. A corner of a rounded rect at
+    #   half-extent hx with radius r is centred at (hx - r, 0), not (hx, 0);
+    #   using the edge midpoint pushes the path r outward and inflates the
+    #   bounding box by exactly r.
+    # * Corners must be walked as real ARCS. Interpolating straight lines
+    #   between the four corner start/end points cuts the corner off, the path
+    #   no longer matches the shell it is meant to cut, and EXACT reports a
+    #   degenerate result — a few hundred stray verts and a bbox that grows
+    #   asymmetrically, because the shortcut lands differently on each axis.
     perim, acc = [], [0.0]
-    steps = 1440
-    for i in range(steps):
-        t = (i / steps) * 4.0
-        edge = int(t)
-        u = t - edge
-        a = [(hx - r, 0.0, 0.00),
-             (0.0, hy - r, 0.25),
-             (-hx + r, 0.0, 0.50),
-             (0.0, -hy + r, 0.75)][edge]
-        b = [(0.0, hy - r, 0.25),
-             (-hx + r, 0.0, 0.50),
-             (0.0, -hy + r, 0.75),
-             (hx - r, 0.0, 1.00)][edge]
-        p0 = (a[0] + r * math.cos(2 * math.pi * a[2]),
-              a[1] + r * math.sin(2 * math.pi * a[2]))
-        p1 = (b[0] + r * math.cos(2 * math.pi * b[2]),
-              b[1] + r * math.sin(2 * math.pi * b[2]))
-        perim.append((p0[0] + (p1[0] - p0[0]) * u, p0[1] + (p1[1] - p0[1]) * u))
+    # rounded_rect already returns a CCW ring with subdivided edges and true
+    # corner arcs, in order — exactly the path we need, no resampling.
+    perim = rounded_rect(hx, hy, r, seg=24, edge_sub=96)
     for i in range(1, len(perim)):
         ax, ay = perim[i - 1]
         bx, by = perim[i]
@@ -367,8 +420,11 @@ def build_grille_band(mats, pitch=GRILLE_PITCH, hole_r=GRILLE_HOLE_R, seg=10):
             px, py, tx, ty = point_at(s)
             rx, ry = -ty, tx                 # outward normal
             base = len(verts)
-            # front ring (at the band surface) and back ring (inside the body)
-            for oz in (0.0, -depth):
+            # front ring (flush with the skin) and back ring (on the groove
+            # floor). depth is measured OUTWARD here: the groove was cut
+            # inboard by GRILLE_RECESS and the tube has to span it back out to
+            # the original skin, or it stays buried and the holes vanish.
+            for oz in (0.0, depth):
                 for ox, oy in ring:
                     verts.append((px + rx * (ox * hole_r) + tx * (oy * hole_r),
                                   py + ry * (ox * hole_r) + ty * (oy * hole_r),
@@ -392,16 +448,11 @@ def build_grille_band(mats, pitch=GRILLE_PITCH, hole_r=GRILLE_HOLE_R, seg=10):
 
     obj = simple_mesh("BottomGrille", verts, faces, mats["grille"], smooth=True)
 
-    # Recessed band panel behind the holes. It is set INWARD from the tube
-    # rings so the dark hole mouths stand proud of it and stay visible from
-    # below — a panel flush with the rings just reads as a solid dark plate.
-    skin = R_VERT
-    panel_inset = inset + hole_r + 0.10
-    phx, phy = W / 2.0 - panel_inset, D / 2.0 - panel_inset
-    pr = skin - panel_inset
-    panel = build_band_panel(
-        mats, rounded_rect_path(phx, phy, pr), z_bot, z_top, mats["cavity"])
-    panel.name = "GrilleBacking"
+    # No boolean here. The groove is part of the body loft (see grille_inset),
+    # so the hole tubes just sit in it: their mouths are flush with the skin
+    # and their barrels reach down to the groove floor. Booleans on this shape
+    # failed three ways in a row — tangent cutter, buried cutter, proud cutter
+    # — and two of those are silent.
     print("grille: %d holes in %d rows, band z %.2f..%.2f cm"
           % (placed, rows, FOOT_H, z_top))
     return obj
@@ -425,17 +476,44 @@ def rounded_rect_path(hx, hy, r, steps=720):
     return pts
 
 
-def build_band_panel(mats, perim, z_lo, z_hi, mat):
-    """Thin skirt wrapping the perimeter between two heights."""
-    ring = [perim[i] for i in range(0, len(perim), 8)]
-    verts, faces = [], []
-    for px, py in ring:
-        verts.append((px, py, z_lo))
-        verts.append((px, py, z_hi))
+def build_band_panel(mats, perim, z_lo, z_hi, mat, proud=0.0):
+    """Closed ring prism wrapping the perimeter between two heights.
+
+    Used as a boolean cutter for the grille groove, so it has to be a real
+    watertight solid: sample the path densely and cap nothing (a ring prism is
+    already closed if the path is closed). Sampling every 8th point leaves the
+    faces so thin that EXACT treats the cutter as degenerate and the boolean
+    silently no-ops — the groove stays uncut and the bounding box still
+    verifies, so nothing else catches it.
+
+    `proud` offsets the ring radially: negative values push it inboard, which
+    is what cuts a recess rather than adding a shell of new geometry.
+    """
+    ring = list(perim)
+    # A ring prism with no top/bottom caps is an open surface, and EXACT
+    # silently no-ops on open cutters. Build all four rings — outer bottom,
+    # outer top, inner bottom, inner top — and cap the ends so the solid is
+    # watertight before handing it to the boolean.
     m = len(ring)
+    verts, faces = [], []
+
+    def add_ring(z, offset):
+        base = len(verts)
+        for px, py in ring:
+            n = math.hypot(px, py) or 1.0
+            verts.append((px + px / n * offset, py + py / n * offset, z))
+        return base
+
+    ob = add_ring(z_lo, proud)      # outer, bottom
+    ot = add_ring(z_hi, proud)      # outer, top
+    ib = add_ring(z_lo, 0.0)        # inner (on the path), bottom
+    it = add_ring(z_hi, 0.0)        # inner, top
     for i in range(m):
         j = (i + 1) % m
-        faces.append((2 * i, 2 * j, 2 * j + 1, 2 * i + 1))
+        faces.append((ob + i, ob + j, ot + j, ot + i))   # outer wall
+        faces.append((ib + j, ib + i, it + i, it + j))   # inner wall
+        faces.append((ib + i, ib + j, ob + j, ob + i))   # bottom cap
+        faces.append((ot + i, ot + j, it + j, it + i))   # top cap
     return simple_mesh("BandPanel_%.2f" % z_lo, verts, faces, mat, smooth=True)
 
 
@@ -722,7 +800,7 @@ def main():
     build_rear_io(mats)
     build_front_io(mats, body)
     build_bottom_details(mats)
-    build_grille_band(mats)
+    build_grille_band(mats, body)
     build_studio(scene)
 
     lo, hi, size = evaluated_bbox()

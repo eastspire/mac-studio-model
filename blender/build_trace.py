@@ -38,7 +38,7 @@ bld.build_front_io(mats, body)
 rep("after front_io")
 bld.build_bottom_details(mats)
 rep("after bottom")
-bld.build_grille_band(mats)
+bld.build_grille_band(mats, body)
 rep("after grille")
 
 print("--- per-object offenders (|coord| > 9.85) ---")
