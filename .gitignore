@@ -1,0 +1,21 @@
+# Apple product photography fetched during the fidelity check is
+# Apple-copyrighted and must not be redistributed
+reference/
+
+# Full-resolution Cycles output: 12 MB of PNG. The web-optimised JPEGs under
+# docs/images/ are what the site actually serves.
+renders/*.png
+renders/small/
+renders/tiny/
+
+# Blender generated
+*.blend
+*.blend1
+mac_studio.blend
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store

@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mac Studio — 1:1 Blender Model</title>
+<meta name="description" content="Dimensionally exact procedural model of the aluminium Mac Studio, built with Blender's Python API and verified to ±0.000 mm against Apple's published specs.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>Mac&nbsp;Studio</h1>
+  <p class="sub">1:1 procedural model · Blender <code>bpy</code> · dimensionally verified</p>
+</header>
+
+<section class="hero">
+  <img src="images/04_hero.jpg" alt="Mac Studio model, three-quarter hero view" width="1600" height="1200">
+</section>
+
+<section>
+  <h2>Verified dimensions</h2>
+  <p class="lede">
+    Measured from the evaluated mesh with every modifier applied, against
+    Apple's published tech specs. Not eyeballed — the build script prints these
+    numbers and exits non-zero if any axis drifts past 0.5&nbsp;mm.
+  </p>
+  <table>
+    <thead>
+      <tr><th>Axis</th><th>Official</th><th>Model</th><th>Δ</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Width (X)</td><td>19.70 cm <span class="dim">7.7 in</span></td><td>19.7000 cm</td><td class="ok">+0.000 mm</td></tr>
+      <tr><td>Depth (Y)</td><td>19.70 cm <span class="dim">7.7 in</span></td><td>19.7000 cm</td><td class="ok">+0.000 mm</td></tr>
+      <tr><td>Height (Z)</td><td>9.50 cm <span class="dim">3.7 in</span></td><td>9.5000 cm</td><td class="ok">+0.000 mm</td></tr>
+    </tbody>
+  </table>
+  <p class="note">
+    Height is the full 3.7&nbsp;in <em>including</em> the rubber feet: the shell is
+    9.30&nbsp;cm and the feet add 0.20&nbsp;cm.
+    Source: <a href="https://www.apple.com/mac-studio/specs/">apple.com/mac-studio/specs</a>,
+    “Size and Weight” section.
+  </p>
+</section>
+
+<section>
+  <h2>Rendered views</h2>
+  <div class="grid">
+    <figure><a href="images/01_front.jpg"><img src="thumbs/01_front.jpg" alt="Front elevation" loading="lazy"></a><figcaption>Front</figcaption></figure>
+    <figure><a href="images/02_side.jpg"><img src="thumbs/02_side.jpg" alt="Side profile" loading="lazy"></a><figcaption>Side</figcaption></figure>
+    <figure><a href="images/03_rear.jpg"><img src="thumbs/03_rear.jpg" alt="Rear" loading="lazy"></a><figcaption>Rear</figcaption></figure>
+    <figure><a href="images/05_top.jpg"><img src="thumbs/05_top.jpg" alt="Top-down" loading="lazy"></a><figcaption>Top</figcaption></figure>
+    <figure><a href="images/06_bottom.jpg"><img src="thumbs/06_bottom.jpg" alt="Underside with grille, feet and power button" loading="lazy"></a><figcaption>Underside</figcaption></figure>
+    <figure><a href="images/04_hero.jpg"><img src="thumbs/04_hero.jpg" alt="Three-quarter hero" loading="lazy"></a><figcaption>Hero</figcaption></figure>
+    <figure><a href="images/07_front_closeup.jpg"><img src="thumbs/07_front_closeup.jpg" alt="Front panel close-up" loading="lazy"></a><figcaption>Front panel</figcaption></figure>
+    <figure><a href="images/08_rear_closeup.jpg"><img src="thumbs/08_rear_closeup.jpg" alt="Rear connector bay close-up" loading="lazy"></a><figcaption>Connector bay</figcaption></figure>
+  </div>
+  <p class="note">Cycles, 1500&times;1125, 128 samples, four-light studio setup with a gradient environment and bounce cards.</p>
+</section>
+
+<section>
+  <h2>What the model contains</h2>
+  <p class="lede">Matched against Apple's own product photography, not from memory.</p>
+  <div class="cols">
+    <div>
+      <h3>Enclosure</h3>
+      <p>Anodised silver aluminium, 1.6&nbsp;cm vertical corner radius, 0.35&nbsp;cm
+      top/bottom edge break. Single-piece block — the top is one continuous
+      surface, not a lid in a tray.</p>
+    </div>
+    <div>
+      <h3>Front</h3>
+      <p>Smooth and uninterrupted. Two <strong>vertical</strong> USB-C ports and a
+      horizontal SDXC slot low on the left; status LED low on the right. Every
+      opening is a real boolean recess with a socket built wall-by-wall — bright
+      metal walls, shadowed back plate, contact tongue.</p>
+    </div>
+    <div>
+      <h3>Rear</h3>
+      <p>A 0.85&nbsp;cm recessed connector bay holding, left to right: power
+      inlet, 4&times; Thunderbolt 5, 2&times; USB-A, HDMI 2.1, 10Gb Ethernet
+      (RJ-45), 3.5&nbsp;mm headphone jack.</p>
+    </div>
+    <div>
+      <h3>Underside</h3>
+      <p>Perforated honeycomb ventilation plate as genuine geometry — one quad
+      ring per hole, 8-gon openings, no texture — plus four rubber feet and the
+      Touch ID power button.</p>
+    </div>
+  </div>
+  <p class="note">The ventilation grille is on the <strong>bottom</strong>, not the
+  front. The front panel is smooth silver. Top and sides are plain, with no logo.</p>
+</section>
+
+<section>
+  <h2>Reproducing</h2>
+<pre><code># geometry + .blend + bbox report
+blender --background --python blender/build_mac_studio.py
+
+# 8 views (arg 1 = output dir, arg 2 = samples)
+blender --background --python blender/render_views.py -- renders 128
+
+# dimension check -&gt; VERIFY_OK / VERIFY_FAIL
+blender --background --python blender/verify.py</code></pre>
+  <p class="note">
+    Camera distance is derived from the model's bounding sphere and the lens FOV,
+    so re-framing survives geometry edits — no hand-tuned distance constants.
+  </p>
+</section>
+
+<section>
+  <h2>Blender gotchas hit while building this</h2>
+  <p class="lede">Each one produced a plausible-looking wrong result rather than an error.</p>
+  <ol class="gotchas">
+    <li>
+      <strong>Non-planar n-gon caps break the EXACT boolean solver.</strong>
+      The lofted shell's top and bottom caps are large non-planar n-gons. Booleans
+      against them “succeed” but silently merge the <em>cutter's</em> outer half
+      into the shell, so the bounding box <em>grows by the cutter's overhang</em>.
+      Triangulating the body first fixes it. Guard on polygon vertex counts —
+      <code>data.loop_triangles</code> is a lazily-filled cache and is not a valid
+      “already triangulated” test.
+    </li>
+    <li>
+      <strong>A cutter must straddle the skin.</strong> Outer face proud of the
+      surface (discarded), inner face reaching the desired depth. A cutter that
+      does not clearly cross the surface does not produce a recess.
+    </li>
+    <li>
+      <strong>Keep the cutter's bevel small relative to its depth.</strong>
+      A 0.16&nbsp;cm bevel on a 0.60&nbsp;cm cutter rounds away the part
+      overlapping the skin and reproduces the absorption above.
+    </li>
+    <li>
+      <strong>Make the extrusion direction an explicit parameter.</strong> A
+      helper that hard-codes “body extends toward −Y” builds front-panel detail
+      <em>outside</em> the enclosure and inflates the bbox by the part's depth.
+    </li>
+    <li>
+      <strong>Auto-smooth needs edge subdivision.</strong> A flat panel lofted
+      as one huge quad shades with visible banding.
+    </li>
+    <li>
+      <strong>Blender 4.x renamed the smooth-shading APIs</strong> —
+      <code>shade_auto_smooth</code> (4.2+) / <code>shade_smooth_by_angle</code>
+      (4.1); <code>mesh.use_auto_smooth</code> is gone.
+    </li>
+    <li>
+      <strong>BSDF sockets were renamed in 4.x</strong> —
+      <code>Clearcoat</code>→<code>Coat Weight</code>,
+      <code>Transmission</code>→<code>Transmission Weight</code>.
+    </li>
+    <li>
+      <strong>A bevel wider than half the shortest side self-intersects.</strong>
+    </li>
+    <li>
+      <strong>At roughness 0.19 the shell is a mirror.</strong> Bare area lights
+      give it nothing to reflect, so a gradient world and bounce cards are
+      load-bearing, not decoration.
+    </li>
+    <li>
+      <strong>Exclude studio furniture from bbox measurement</strong> or a 40&nbsp;cm
+      bounce card swamps a 19.7&nbsp;cm product.
+    </li>
+  </ol>
+</section>
+
+<section>
+  <h2>Known deviations</h2>
+  <ul>
+    <li><strong>Port micro-detail.</strong> Connector internals — pin pitch, latch cutouts, SDXC contact rows — are represented, not reproduced. A production asset would use a manufacturer CAD import.</li>
+    <li><strong>Grille pitch</strong> is 3&nbsp;mm, chosen to read at render scale; the real perforation is finer.</li>
+    <li><strong>Finish.</strong> Machining anisotropy, bead-blast micro-texture, and the exact anodised tone are approximated with a single isotropic roughness value.</li>
+    <li><strong>No Apple logo or silkscreen</strong> — the current enclosure has none. The 2014–2020 shell did.</li>
+    <li><strong>Colour management</strong> is left at Blender's default view transform rather than matched against a calibrated reference.</li>
+  </ul>
+</section>
+
+<footer>
+  <p>Built procedurally with <a href="https://www.blender.org/">Blender</a> and its
+  Python API. Model and renders generated from script — no scanned or imported
+  geometry. Apple, Mac Studio, and macOS are trademarks of Apple Inc.; this is an
+  independent reconstruction.</p>
+</footer>
+
+</body>
+</html>
