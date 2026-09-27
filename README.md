@@ -190,6 +190,26 @@ than an error.
 13. **Budget a perforated band's Z extent before placing holes.** Tube depth
     plus row spacing must fit between the foot line and the band top, or the
     lowest holes drop below the feet and Z grows by the overshoot.
+14. **A boolean groove needs a cutter that straddles the skin — and two of the
+    three ways to get that wrong are silent.** A cutter *tangent* to the shell
+    and a cutter *buried inside* it both produce no cut at all; only a cutter
+    *proud* of the skin is loud, and it leaves the difference behind as new
+    geometry that inflates the bounding box by the overshoot (measured: +1.16 mm
+    at `proud=0.04`). Worse, the quiet failures still pass `verify.py` — the
+    bounding box is unchanged and nothing else looks wrong. Model the recess
+    into the loft itself (`grille_inset`) and the question never comes up.
+15. **EXACT silently no-ops on open and degenerate cutters.** A ring prism with
+    no end caps is an open surface; sample its path every 8th point and the
+    faces are so thin the solver treats the solid as degenerate. Both leave the
+    vertex count unchanged and the boolean "succeeding". Cap all four rings and
+    sample densely.
+16. **Ray-cast to check a cut, don't look at the render.** A 300×200 offscreen
+    render of the band plus a `scene.ray_cast` sweep across its height is what
+    finally located this class of bug: the band read as smooth metal for a
+    dozen render iterations, and a ray sweep showed the front face at a constant
+    y=-9.850 the whole way down. After the fix the same sweep alternates
+    between the groove floor and the hole barrels, and the render goes from
+    0.00% dark pixels to 30%.
 
 ## Known deviations
 
