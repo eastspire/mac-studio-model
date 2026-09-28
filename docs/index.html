@@ -53,14 +53,18 @@
     <figure><a href="images/02_side.jpg"><img src="thumbs/02_side.jpg" alt="Side profile" loading="lazy"></a><figcaption>Side</figcaption></figure>
     <figure><a href="images/03_rear.jpg"><img src="thumbs/03_rear.jpg" alt="Rear" loading="lazy"></a><figcaption>Rear</figcaption></figure>
     <figure><a href="images/05_top.jpg"><img src="thumbs/05_top.jpg" alt="Top-down" loading="lazy"></a><figcaption>Top</figcaption></figure>
-    <figure><a href="images/06_bottom.jpg"><img src="thumbs/06_bottom.jpg" alt="Underside with grille, feet and power button" loading="lazy"></a><figcaption>Underside</figcaption></figure>
+    <figure><a href="images/06_bottom.jpg"><img src="thumbs/06_bottom.jpg" alt="Underside with feet and power button" loading="lazy"></a><figcaption>Underside</figcaption></figure>
     <figure><a href="images/04_hero.jpg"><img src="thumbs/04_hero.jpg" alt="Three-quarter hero" loading="lazy"></a><figcaption>Hero</figcaption></figure>
     <figure><a href="images/07_front_closeup.jpg"><img src="thumbs/07_front_closeup.jpg" alt="Front panel close-up" loading="lazy"></a><figcaption>Front panel</figcaption></figure>
     <figure><a href="images/08_rear_closeup.jpg"><img src="thumbs/08_rear_closeup.jpg" alt="Rear connector bay close-up" loading="lazy"></a><figcaption>Connector bay</figcaption></figure>
-    <figure><a href="images/11_grille_front.jpg"><img src="thumbs/11_grille_front.jpg" alt="Perforated base band, straight on" loading="lazy"></a><figcaption>Grille band</figcaption></figure>
-    <figure><a href="images/10_grille_macro.jpg"><img src="thumbs/10_grille_macro.jpg" alt="Perforated base band, macro" loading="lazy"></a><figcaption>Grille macro</figcaption></figure>
+    <figure><a href="images/09_grille_band.jpg"><img src="thumbs/09_grille_band.jpg" alt="Rear perforated field, straight on" loading="lazy"></a><figcaption>Rear field</figcaption></figure>
+    <figure><a href="images/10_grille_macro.jpg"><img src="thumbs/10_grille_macro.jpg" alt="Perforation lattice, macro" loading="lazy"></a><figcaption>Perforation macro</figcaption></figure>
+    <figure><a href="images/12_rear_flat.jpg"><img src="thumbs/12_rear_flat.jpg" alt="Rear at eye level" loading="lazy"></a><figcaption>Rear, eye level</figcaption></figure>
+    <figure><a href="images/21_rear_ports.jpg"><img src="thumbs/21_rear_ports.jpg" alt="Rear port row close-up" loading="lazy"></a><figcaption>Rear ports</figcaption></figure>
   </div>
-  <p class="note">Cycles, 1500&times;1125, 128 samples, four-light studio setup with a gradient environment and bounce cards.</p>
+  <p class="note">Cycles, 1500&times;1125, 128 samples, four-light studio setup with a gradient
+  environment and bounce cards. Perforations are on the rear panel only — the front,
+  both sides and the underside are plain aluminium.</p>
 </section>
 
 <section>
@@ -93,17 +97,22 @@
     </div>
     <div>
       <h3>Ventilation</h3>
-      <p>Three separate fields, each real geometry — one quad ring per hole, no
-      texture. Measured against Apple's rear diagram, from the top of the
-      9.5&nbsp;cm height: a perforated field 5–55%, the solid port band 55–70%,
-      a second field 70–80%, a solid transition 80–90%, and the base band
-      90–100% wrapping all four faces. The hole lattice is square at a 2&nbsp;mm
-      pitch with a 1.42&nbsp;mm radius, which opens 39.6% of the surface.</p>
+      <p>Three separate fields on the rear panel, each real geometry — one quad
+      ring per hole, no texture. Measured against Apple's rear diagram, from the
+      top of the 9.5&nbsp;cm height: a perforated field 5–55%, the solid port band
+      55–70%, a second field 70–80%, a solid transition 80–90%, and the base band
+      90–100%. The hole lattice is square at a 2&nbsp;mm pitch with a 1.42&nbsp;mm
+      radius, which opens 39.6% of the surface.</p>
+      <p>Every field is confined to the back. The front panel, both side panels
+      and the underside are plain aluminium from edge to edge — the field mask is
+      keyed on each point's position on the outline, and both the recess in the
+      body loft and the hole placement call it, so they cannot drift apart and
+      leave the holes buried in solid metal.</p>
     </div>
     <div>
       <h3>Underside</h3>
-      <p>The base band's perforation, four rubber feet, four circular intake
-      mouths recessed into the shell, and the Touch ID power button.</p>
+      <p>Four rubber feet and the Touch ID power button, on an otherwise plain
+      aluminium plate.</p>
     </div>
   </div>
   <p class="note">Every dimension, port position and ventilation boundary here
@@ -216,6 +225,26 @@ python3 tools/face_diff.py renders/ortho/rear.png reference/hk/hw_back.jpg rear<
       so the viewer's <code>/Grille/</code> and <code>/^Port_/</code>
       categorisation matched nothing and the per-part toggles did nothing. Copy
       the object name onto the mesh data before export.
+    </li>
+    <li>
+      <strong>Key a face mask on geometry, not on a single axis or a bare arc
+      length</strong> On a rounded square the rear panel and each side panel span
+      the same range of the other axis, so a <code>py</code>-keyed mask lights up
+      the sides and leaves the back bare. Arc length does separate them, but only
+      if the arc is rescaled from the inset profile the holes are laid along onto
+      the reference outline — and half a centimetre of error slides the field onto
+      the side panels. Asking "is this point on the rear panel?" directly, from
+      <code>px</code>/<code>py</code> and the corner radius, is the version that
+      has not moved in three attempts.
+    </li>
+    <li>
+      <strong>Test a face with a ray grid, and test it from the flat</strong> A
+      perforation field can be present in the scene and still be invisible. The
+      tubes are cut to the field's full depth; if the shell's recess is shallower
+      the tubes sit inside solid metal, and only a ray fired at the surface tells
+      you so — the objects are all there and the bounding box is correct. A ray
+      grid over one face also grazes the corner arc and reports hits belonging to
+      the neighbouring panel, so check the hit positions, not just the count.
     </li>
   </ol>
 </section>

@@ -162,14 +162,11 @@ def main():
     fails += check("rear bay floor is aluminium, not a black pocket",
                    share < 25.0, "%.0f%% of %d faces non-metal" % (share, len(inside)))
 
-    # 7. the underside must carry circular ventilation intakes
-    vents = [o for o in bpy.data.objects if o.name.startswith("VentBore_")]
-    fails += check("four round underside intakes", len(vents) == 4,
+    # 7. the underside is solid: no ventilation mouths down there
+    vents = [o for o in bpy.data.objects
+             if o.name.startswith(("VentBore_", "VentCavity_", "VentLip_"))]
+    fails += check("no ventilation intakes on the underside", not vents,
                    "%d found" % len(vents))
-    for o in vents:
-        zmin = min((o.matrix_world @ Vector(c)).z for c in o.bound_box)
-        fails += check("%s sits inside the shell" % o.name, zmin > 0.0,
-                       "zmin %.2f" % zmin)
 
     print("\n%s (%d failures)" % ("PORTS_OK" if not fails else "PORTS_FAIL", fails))
     return fails

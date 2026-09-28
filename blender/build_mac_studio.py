@@ -230,10 +230,6 @@ def build_body(mats):
 
     verts, faces, mats_per_face = [], [], []
     hx, hy = W / 2.0, D / 2.0
-    gap_t = UPPER_FRONT_GAP / (2.0 * hy)   # front-corner gap as a 0..1 frac
-    # Past this t the recess is at FULL depth. The taper is a short arc beside
-    # the front panel, not the whole perimeter — see perimeter_factor.
-    taper_end = FIELD_TAPER_CM / (2.0 * hy) + gap_t
 
     for z in levels:
         base_d = fillet_inset(z, z_lo, z_hi)
@@ -244,15 +240,20 @@ def build_body(mats):
         # each point to the inset profile — scaling by the profile's own extents
         # keeps the rounded corners correct instead of squashing them.
         #
-        # The BASE band is different: it wraps the whole perimeter, front
-        # included. Apple's front diagram reads 23% dark across the bottom 10%
-        # of the panel, so the front's base band is perforated too, and this
-        # factor used to force it to 0 there — which left the front face solid
-        # down to the feet while the other three faces were perforated.
+        # The base band is a full-perimeter recess in the ORIGINAL design and a
+        # rear-panel-only one now; either way the mask below decides. Note the
+        # recess must be keyed on the same arc as the hole placement, or the
+        # two drift and the tubes end up buried inside solid metal.
         ux0, uy0 = hx - base_d, hy - base_d
-        in_base = (GRILLE_BAND_Z0 - 1e-6 <= z <= GRILLE_BAND_Z1 + 1e-6)
         for px, py in prof:
-            ff = perimeter_factor(py, uy0, gap_t, taper_end, in_base)
+            # Same call the hole placement makes, on the same profile, so the
+            # recess and the holes stop at the same place. If the recess ran
+            # wider there would be a shallow channel running off the back onto
+            # the sides with no holes in it — visible in raking light.
+            ff = arc_factor(px, py, ux0, uy0, BASE_FRONT_GAP,
+                            FIELD_REAR_FADE_CM, in_base=False)
+            if ff < 0.5:
+                ff = 0.0
             d = base_d + grille_inset(z, ff)
             verts.append((px / ux0 * (hx - d), py / uy0 * (hy - d), z))
 
@@ -448,12 +449,16 @@ UPPER_Z1 = Z_TOTAL * 0.94
 # roughly two hole radii — deep enough to shadow each opening individually,
 # shallow enough that the floor between them still catches light.
 UPPER_DEPTH = 0.15
-UPPER_FRONT_GAP = 0.34   # the field stops this far short of the front face
-# Arc length over which the recess ramps from 0 to full depth, measured from
-# the end of UPPER_FRONT_GAP. Only the corner beside the front panel tapers;
-# the two sides and the rear sit at full depth. Keeping this short is what puts
-# the side perforations on the surface instead of inside the shell.
-FIELD_TAPER_CM = 2.0
+# The perforation fields are REAR-ONLY. The base band used to wrap all four
+# faces and the upper/lower fields used to run down both sides; on request the
+# model keeps them on the back panel alone, and the front and both sides are
+# plain aluminium from the top edge to the underside. `arc_factor` decides
+# which panel a point is on; FIELD_REAR_FADE_CM is how far the field carries
+# past the rear panel's straight edge before it reaches zero.
+FIELD_REAR_FADE_CM = 2.7
+# Front-panel standoff for the base band. It is no longer a wrap-around band,
+# so this is just the same rear-only mask's front gap.
+BASE_FRONT_GAP = 0.34
 UPPER_LEVELS = 5         # loft levels across the field
 # Hole size is set from the OPEN AREA, not by eye. A pixel diff against
 # Apple's rear diagram puts the perforated field at 42-45% dark pixels per
@@ -469,7 +474,6 @@ UPPER_HOLE_R = 0.071
 LOWER_F_Z0 = Z_TOTAL * 0.20
 LOWER_F_Z1 = Z_TOTAL * 0.30
 LOWER_F_DEPTH = 0.10
-LOWER_F_GAP = 0.34
 LOWER_F_LEVELS = 3
 
 
@@ -578,8 +582,13 @@ def build_grille_field(mats, name, z_lo, z_hi, depth, pitch, hole_r,
         s = (pitch / 2.0) if row % 2 else 0.0
         while s < total:
             px, py, tx, ty = point_at(s)
-            ff = front_factor(py)
-            if ff < 0.15:
+            # Keyed on the point's own position, not on `py` alone and not on a
+            # precomputed arc — see arc_factor for why both of those put the
+            # holes on the side panels instead of the back.
+            ff = front_factor(px, py, hx, hy)
+            # Cut the field off well before the mask reaches zero, so the
+            # corner arc carries no holes.
+            if ff < 0.5:
                 s += pitch
                 continue          # outside this field's arc
             rx, ry = -ty, tx                 # outward normal
@@ -609,62 +618,57 @@ def build_grille_field(mats, name, z_lo, z_hi, depth, pitch, hole_r,
     return obj
 
 
-def perimeter_factor(py, half_depth, gap_t, taper_end, in_base):
-    """How much of the recess depth applies at perimeter position `py`.
+def arc_factor(px, py, half_x, half_y, gap_cm, rear_fade_cm,
+               in_base=False):
+    """Perimeter mask: 1.0 on the rear panel, 0.0 everywhere else.
 
-    `py` is the UNINSET profile coordinate, so 0 is the middle of the left or
-    right wall and -half_depth is the front face. `taper_end` is the value of
-    t past which the recess is at full depth.
+    Keyed on GEOMETRY, not on arc length and not on a single axis. A single axis
+    cannot work: on a rounded square the rear panel and each side panel span the
+    same range of the other axis, so `py` is identical across a side panel and
+    the middle of the back, and a py-keyed mask lights up the sides while leaving
+    the back bare. Arc length does separate them, but only if the arc is
+    rescaled from the inset profile onto the reference one — and getting that
+    wrong by half a centimetre slides the field onto the side panels, which is
+    exactly what happened.
 
-    This MUST be the same function the hole placement uses, or the two drift
-    apart and the holes end up buried: the recess is what makes the skin stand
-    back, and if it is shallower than the tube length the tube is inside solid
-    metal and invisible from outside. That is exactly what happened — the loft
-    smoothstepped across the whole perimeter, the sides landed at 0.5, the
-    recess came out 0.075 cm against a 0.15 cm tube, and a 13x13 ray grid over
-    the right face hit the grille zero times.
+    So this asks the direct question: is this point on the rear panel? That is
+    `py` out near `half_y` and `px` inside the rear panel's width, with a
+    smoothstep ramp down the corner arc to zero before the side panel begins.
+    Both the recess in the body loft and the hole placement call this, so the
+    two cannot drift — if they did, the recess would be shallower than the hole
+    tubes and every hole would end up buried inside solid aluminium, which is
+    invisible from outside and survived several builds before it was caught by
+    a ray grid.
+
+    `half_x`/`half_y` are the profile's own half-extents, so the same call works
+    on the body loft and on the inset profile the hole tubes are laid along.
     """
-    t = (py + half_depth) / (2.0 * half_depth)   # 0 at the front, 1 at the rear
-    if t >= taper_end:
-        return 1.0
-    if t <= gap_t:
-        # the base band wraps the front too; the other fields do not
+    if half_y <= 0.0:
+        return 0.0
+    # Only the REAR half of the outline can carry the field. Testing `px > flat`
+    # alone is not enough: the front corners sit at the same |px| as the rear
+    # ones, so they passed the corner test and came back with a full-depth mask
+    # — 96 vertices' worth of grille on the front panel, at x +8.73..8.87.
+    if py <= 0.0:
         return 1.0 if in_base else 0.0
-    u = (t - gap_t) / (taper_end - gap_t)
-    return u * u * (3.0 - 2.0 * u)               # smoothstep
 
-
-def field_factor(gap_cm):
-    """Perimeter mask: 1.0 on the rear and sides, 0.0 within `gap_cm` of the front.
-
-    The front face is where py is most negative, so the mask is a smoothstep on
-    how far around from that face a point sits.
-
-    The previous version smoothstepped across the WHOLE remaining perimeter, from
-    the front gap all the way to the rear. That put the side faces — py = 0,
-    t = 0.5 — at exactly 0.5, so the recess was only half depth there (0.075 cm
-    against a full 0.15) while the hole tubes were still cut to the full depth.
-    The holes ended up buried inside the shell, invisible from outside: a
-    13x13 ray grid over the right face hit UpperGrille zero times, and the
-    grille's own side vertices sat at x 9.63..9.77 behind skin at x 9.85.
-
-    The transition now completes within the first `span_cm` of arc from the gap
-    and stays at 1.0 for everything past that, so the sides and the rear get the
-    full recess and only the corner beside the front panel tapers.
-    """
-    half = D / 2.0
-    gt = gap_cm / (2.0 * half)
-    st = FIELD_TAPER_CM / (2.0 * half) + gt
-
-    def f(py):
-        t = (py + half) / (2.0 * half)   # 0 at the front, 1 at the rear
-        if t >= st:
-            return 1.0
-        if t <= gt:
-            return 0.0
-        u = (t - gt) / (st - gt)
-        return u * u * (3.0 - 2.0 * u)   # smoothstep
-    return f
+    # how far in from the rear face, as a fraction of the depth available
+    t = (half_y - py) / (2.0 * half_y)          # 0 at the rear face, 0.5 at a side
+    # the rear panel's straight width, less the corner radius
+    flat = max(0.0, half_x - R_VERT)
+    if px > flat:
+        u = (px - flat) / max(1e-6, R_VERT)     # 0 at the corner start, 1 past it
+        u = 1.0 if u > 1.0 else u
+        t = 0.5 * u                              # blend into the side panel
+    if t <= 0.0:
+        return 1.0
+    # ramp out over the corner; rear_fade_cm is in cm of arc, which the corner
+    # arc is, so convert through the radius
+    span = rear_fade_cm / max(1e-6, (2.0 * half_y))
+    if t >= span:
+        return 1.0 if in_base else 0.0
+    v = 1.0 - t / span
+    return v * v * (3.0 - 2.0 * v)
 
 
 def build_grille_band(mats, body):
@@ -684,23 +688,30 @@ def build_grille_band(mats, body):
       front panel solid silver above the band
     * lower field — z 18%..34% of height, rear and sides only, below the ports
     """
+    # All three fields share the same rear-only perimeter mask. The base band
+    # used to pass a constant 1.0 here, which is what put its holes on all four
+    # faces including the front panel.
+    def rear_only(px, py, half_x, half_y):
+        return arc_factor(px, py, half_x, half_y, BASE_FRONT_GAP,
+                          FIELD_REAR_FADE_CM)
+
     band = build_grille_field(
         mats, "BottomGrille",
         GRILLE_BAND_Z0 + 0.06, GRILLE_BAND_Z1 - 0.06,
         GRILLE_RECESS, GRILLE_PITCH, GRILLE_HOLE_R,
-        front_factor=lambda py: 1.0, seg=8, rows_cap=8)
+        front_factor=rear_only, seg=8, rows_cap=8)
 
     upper = build_grille_field(
         mats, "UpperGrille",
         UPPER_Z0 + 0.12, UPPER_Z1 - 0.12,
         UPPER_DEPTH, UPPER_PITCH, UPPER_HOLE_R,
-        front_factor=field_factor(UPPER_FRONT_GAP), seg=8, rows_cap=40)
+        front_factor=rear_only, seg=8, rows_cap=40)
 
     lower = build_grille_field(
         mats, "LowerRearGrille",
         LOWER_F_Z0 + 0.10, LOWER_F_Z1 - 0.10,
         LOWER_F_DEPTH, UPPER_PITCH, UPPER_HOLE_R,
-        front_factor=field_factor(LOWER_F_GAP), seg=8, rows_cap=8)
+        front_factor=rear_only, seg=8, rows_cap=8)
     return band, upper, lower
 
 
@@ -982,34 +993,19 @@ def build_front_io(mats, body):
 
 
 def build_bottom_details(mats):
-    """Underside: four feet, the Touch ID button, and the round vent intakes.
+    """Underside: four feet and the Touch ID power button.
 
-    The real underside is not a bare plate. Between the four feet sit circular
-    ventilation intakes: a round recess going UP into the shell, with a dark
-    cavity and a raised lip. They are mouths, not bumps — the shell's underside
-    plane is z = FOOT_H (0.2 cm) and everything else stands on the floor, so
-    anything modelled as a dome below that plane would hang into the foot gap
-    and read as a lump. The model had no intakes at all, which is why the
-    bottom looked like a plain slab.
+    The underside is a plain aluminium plate. Earlier passes added four round
+    ventilation intakes between the feet, inferred from a dark region in a
+    product photograph; there is no direct evidence for them and the brief is
+    that only the rear face is perforated, so the bottom is solid apart from
+    the feet and the power button.
     """
     for i, (sx, sy) in enumerate(((-1, -1), (1, -1), (-1, 1), (1, 1))):
         add_cylinder(
             "Foot_%d" % (i + 1), sx * 7.45, sy * 7.45, FOOT_H / 2.0,
             0.55, FOOT_H, mats["rubber"],
         )
-
-    # Circular ventilation intakes. The lip is a shallow ring standing at the
-    # underside plane; the bore is a dark cavity recessed above it.
-    for i, (bx, by) in enumerate(((-3.5, -3.5), (3.5, -3.5), (-3.5, 3.5), (3.5, 3.5))):
-        # dark cavity floor, set up inside the shell
-        add_cylinder("VentCavity_%d" % (i + 1), bx, by, FOOT_H + 0.55,
-                     0.62, 0.06, mats["cavity"], verts=40)
-        # bore wall: a short tube from the underside plane up to the cavity
-        add_cylinder("VentBore_%d" % (i + 1), bx, by, FOOT_H + 0.30,
-                     0.66, 0.62, mats["cavity"], verts=40)
-        # aluminium lip ring around the mouth, flush with the underside
-        add_cylinder("VentLip_%d" % (i + 1), bx, by, FOOT_H + 0.02,
-                     0.86, 0.05, mats["alu"], verts=48)
 
     # Touch ID power button, underside toward the rear-left
     add_cylinder("PowerButton", -5.60, 6.05, FOOT_H + 0.05, 0.56, 0.12, mats["port"])

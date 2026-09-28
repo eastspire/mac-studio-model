@@ -19,12 +19,18 @@ import bpy
 import mathutils
 from mathutils import Vector
 
-# minimum share of rays that must reach a grille object, per face
+# The brief is that ONLY the rear face is perforated. The front panel, both
+# sides and the underside are plain aluminium, so those three faces must reach
+# grille geometry ZERO times — not "a small share". The bottom is not rayed
+# here: it has no grille objects, which build_bottom_details no longer creates.
+FACES_WITH_MESH = ("rear  +Y",)
+FACES_WITHOUT_MESH = ("front -Y", "right +X", "left  -X")
 MIN_SHARE = {
-    "front -Y": 0.02,   # only the base band wraps the front
+    "front -Y": 0.0,   # must be solid
     "rear  +Y": 0.20,
-    "right +X": 0.20,
-    "left  -X": 0.20,
+    "right +X": 0.0,   # must be solid
+    "left  -X": 0.0,   # must be solid
+    "bottom -Z": 0.0,  # must be solid
 }
 Z_LO, Z_HI = 0.30, 9.40
 GRID = 21
@@ -44,6 +50,7 @@ def main():
         ("rear  +Y", (0, 40, 0), (0, -1, 0), "x"),
         ("right +X", (40, 0, 0), (-1, 0, 0), "y"),
         ("left  -X", (-40, 0, 0), (1, 0, 0), "y"),
+        ("bottom -Z", (0, 0, -40), (0, 0, 1), "x"),   # rays up at the underside
     ]
 
     fails = 0
@@ -56,8 +63,12 @@ def main():
             z = Z_LO + (Z_HI - Z_LO) * iz / (GRID - 1)
             for ia in range(GRID):
                 a = -9.4 + 18.8 * ia / (GRID - 1)
-                o = (Vector((a, org[1], z)) if axis == "x"
-                     else Vector((org[0], a, z)))
+                if axis == "z":       # face lies in a horizontal plane
+                    o = Vector((a, -9.4 + 18.8 * iz / (GRID - 1), org[2]))
+                elif axis == "x":
+                    o = Vector((a, org[1], z))
+                else:
+                    o = Vector((org[0], a, z))
                 hit, loc, nr, idx, obj, mtx = sc.ray_cast(dg, o, d)
                 if not hit:
                     continue
