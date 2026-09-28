@@ -235,18 +235,25 @@ def build_body(mats):
     for z in levels:
         base_d = fillet_inset(z, z_lo, z_hi)
         prof = rounded_rect(hx - base_d, hy - base_d, R_VERT - base_d)
-        # The upper perforated field stops short of the front face, so the
-        # recess depth is a function of position around the perimeter, not just
-        # of z. Measure it on the UNINSET profile, then re-proportion each point
-        # to the inset profile — scaling by the profile's own extents keeps the
-        # rounded corners correct instead of squashing them.
+        # The upper and lower perforated fields stop short of the front face,
+        # so their recess depth is a function of position around the perimeter,
+        # not just of z. Measure it on the UNINSET profile, then re-proportion
+        # each point to the inset profile — scaling by the profile's own extents
+        # keeps the rounded corners correct instead of squashing them.
+        #
+        # The BASE band is different: it wraps the whole perimeter, front
+        # included. Apple's front diagram reads 23% dark across the bottom 10%
+        # of the panel, so the front's base band is perforated too, and this
+        # factor used to force it to 0 there — which left the front face solid
+        # down to the feet while the other three faces were perforated.
         ux0, uy0 = hx - base_d, hy - base_d
+        in_base = (GRILLE_BAND_Z0 - 1e-6 <= z <= GRILLE_BAND_Z1 + 1e-6)
         for px, py in prof:
             t = (py + uy0) / (2.0 * uy0)          # 0 at the front, 1 at the rear
             if t >= 1.0 - gap_t:
                 ff = 1.0
             elif t <= gap_t:
-                ff = 0.0
+                ff = 1.0 if in_base else 0.0
             else:
                 u = (t - gap_t) / (1.0 - 2.0 * gap_t)
                 ff = u * u * (3.0 - 2.0 * u)     # smoothstep
@@ -373,15 +380,32 @@ def add_cylinder(name, cx, cy, cz, r, h, mat, verts=48, axis="Z"):
 # and the straight-on product shot both confirm), so the upper field stops
 # short of the front face and tapers off around the front corners.
 Z_TOTAL = H_TOTAL
-GRILLE_H = 1.60    # height of the base band (front and sides only)
-GRILLE_Z0 = 1.70   # band top; below it is the smooth solid lip
+GRILLE_H = 0.75     # height of the base band
+GRILLE_Z0 = 0.20   # band floor; GRILLE_H + GRILLE_Z0 = GRILLE_BAND_Z1
 GRILLE_PITCH = 0.22
-GRILLE_HOLE_R = 0.058
+# Base band open area, same derivation as UPPER_HOLE_R. Apple's diagram reads
+# ~22% dark across the bottom two bands; the first pass opened
+# pi * 0.058^2 / 0.22^2 = 0.208, which measured 25% — close enough, but r
+# 0.057 at this pitch gives 0.201 and lands on the reference more closely.
+GRILLE_HOLE_R = 0.057
 GRILLE_RECESS = 0.14   # how deep the groove is cut into the shell
 
 # The base band, all around. Modelled directly into the body loft.
-GRILLE_BAND_Z0 = 0.42   # groove floor
-GRILLE_BAND_Z1 = 1.62   # groove ceiling (a 0.08 cm lip of flat skin above)
+#
+# Height is set from the reference, not from taste. Mapping the pixel diff onto
+# z (image row 0 is the top of the machine, so band 85-90% is z 0.95..1.43):
+#
+#     z 0.95..1.43   official  0% dark   solid
+#     z 0.48..0.95   official 24% dark   perforated
+#     z 0.00..0.48   official 22% dark   perforated
+#
+# So the band runs from the underside up to z 0.95, not to 1.62. The old
+# ceiling of 1.62 put holes at z 0.95..1.43 where the real part is solid and
+# measured 27% dark against a reference of 0%. Note the reference's bottom 5%
+# band still reads as perforated even though it overlaps the feet plane — the
+# band's holes start above the shell's own underside at z = FOOT_H = 0.2.
+GRILLE_BAND_Z0 = 0.20   # groove floor, just above the underside
+GRILLE_BAND_Z1 = 0.95   # groove ceiling
 GRILLE_LEVELS = 4       # extra loft levels across the band, for crisp walls
 
 # The three rear zones, as fractions of the 9.5 cm height.
@@ -419,13 +443,26 @@ BAY_Z1 = Z_TOTAL * 0.47   # 4.47 cm
 # metal above the field, inside the fillet's straight run.
 UPPER_Z0 = Z_TOTAL * 0.47
 UPPER_Z1 = Z_TOTAL * 0.94
-UPPER_DEPTH = 0.10
+# Depth of the recessed field. The zone summary reads 31.2% dark against the
+# reference's 42.8% even though the lattice geometry opens 39.6% of the
+# surface — the holes are there but they do not go dark, because at 0.10 cm
+# the recess is shallower than the hole radius (0.071) and light rakes across
+# the far wall. Going to 0.22 overshoots the other way: the whole recessed
+# floor fell below the dark threshold and the zone read 64.1%. 0.15 cm is
+# roughly two hole radii — deep enough to shadow each opening individually,
+# shallow enough that the floor between them still catches light.
+UPPER_DEPTH = 0.15
 UPPER_FRONT_GAP = 0.34   # the field stops this far short of the front face
 UPPER_LEVELS = 5         # loft levels across the field
-# Finer than the base band — Apple's diagram shows a denser grid up there —
-# but the same ~22% open area.
+# Hole size is set from the OPEN AREA, not by eye. A pixel diff against
+# Apple's rear diagram puts the perforated field at 42-45% dark pixels per
+# band; the first pass read 20-29% because the lattice only opened 21% of the
+# surface (pi * 0.052^2 / 0.20^2 = 0.212). These numbers open 41%:
+#   pitch 0.20, r 0.071  ->  pi * 0.005041 / 0.0400 = 0.396
+# The 0.20 pitch keeps a 0.058 cm web between holes, which is what the real
+# part shows — the perforations are separated by metal, not merged into slots.
 UPPER_PITCH = 0.20
-UPPER_HOLE_R = 0.052
+UPPER_HOLE_R = 0.071
 
 # The lower field: 70%..80% from the top, between the port band and the base.
 LOWER_F_Z0 = Z_TOTAL * 0.20
@@ -505,8 +542,24 @@ def build_grille_field(mats, name, z_lo, z_hi, depth, pitch, hole_r,
         ln = math.hypot(dx, dy) or 1.0
         return px, py, dx / ln, dy / ln
 
-    rows = max(1, min(rows_cap, int((z_hi - z_lo) / (pitch * 0.86))))
-    row_dz = (z_hi - z_lo) / max(1, rows - 1) if rows > 1 else 0.0
+    # Rows are spaced on the SAME pitch as the columns, not stretched to fit.
+    #
+    # This used to be
+    #     rows = clamp(int((z_hi - z_lo) / (pitch * 0.86)))
+    #     row_dz = (z_hi - z_lo) / (rows - 1)
+    # which distributes `rows` rows evenly across the band whatever that
+    # comes to, so the row pitch drifted away from the column pitch. At
+    # pitch 0.20 the field came out on a 0.175 cm row pitch, and the pixel
+    # diff against Apple's rear diagram came back alternating — 40%, 29%,
+    # 41%, 29% down the field — because some bands caught a hole row edge-on
+    # and some caught the gap between two of them.
+    #
+    # On a square lattice the band gets floor(span / pitch) rows, spaced
+    # exactly `pitch` apart, with the remainder left as solid metal at the
+    # bottom rather than smeared across the whole field.
+    span = z_hi - z_lo
+    rows = max(1, min(rows_cap, int(span / pitch) + 1))
+    row_dz = pitch
 
     verts, faces = [], []
     placed = 0
@@ -593,7 +646,7 @@ def build_grille_band(mats, body):
     """
     band = build_grille_field(
         mats, "BottomGrille",
-        GRILLE_BAND_Z0 + 0.10, GRILLE_BAND_Z1 - 0.10,
+        GRILLE_BAND_Z0 + 0.06, GRILLE_BAND_Z1 - 0.06,
         GRILLE_RECESS, GRILLE_PITCH, GRILLE_HOLE_R,
         front_factor=lambda py: 1.0, seg=8, rows_cap=8)
 
