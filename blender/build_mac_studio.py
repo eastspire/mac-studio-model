@@ -679,26 +679,38 @@ def build_rear_io(mats):
     # side, so its left-to-right is the NEGATIVE of our +X. Mirror the x values.
     y_mouth = y_face - 0.24
     # x positions are MODEL space, mirrored from the diagram's visual order.
-    # The bay is 15.2 cm wide, so keep everything within +/- 7.0.
+    # The bay is 15.2 cm wide, so keep everything within +/- 7.4.
+    #
+    # USB-C and Thunderbolt shells are TALLER THAN WIDE on the real part — the
+    # opening is a vertical rounded slot about 0.38 x 0.90 cm, not a wide letter
+    # slot. The earlier build had them 0.92 wide x 0.30 high, which reads as a
+    # horizontal slot and is wrong in both axes.
+    #
+    # Spacing is set by verify_ports.py, which fails the build if any two
+    # connectors are closer than 0.20 cm. HDMI (1.50 wide) and the 3.5 mm jack
+    # (0.52 across) sat 0.14 cm apart at the old positions, which reads as the
+    # two openings touching.
     parts = [
-        # (name, x, width, height) — USB-C and TB5 share the USB-C shell
-        ("USBC_1", 6.55, 0.92, 0.30),
-        ("USBC_2", 5.35, 0.92, 0.30),
-        ("USBC_3", 4.15, 0.92, 0.30),
-        ("USBC_4", 2.95, 0.92, 0.30),
-        ("RJ45", 1.15, 1.45, 1.28),
-        ("PowerInlet", -1.15, 1.05, 0.60),
-        ("TB5_1", -3.00, 0.92, 0.30),
-        ("TB5_2", -4.20, 0.92, 0.30),
-        ("HDMI", -5.85, 1.50, 0.44),
+        # (name, x, width, height) — USB-C and TB5 are vertical slots
+        ("USBC_1", 6.30, 0.38, 0.90),
+        ("USBC_2", 5.15, 0.38, 0.90),
+        ("USBC_3", 4.00, 0.38, 0.90),
+        ("USBC_4", 2.85, 0.38, 0.90),
+        ("RJ45", 1.05, 1.45, 1.28),
+        ("PowerInlet", -1.25, 1.05, 0.60),
+        ("TB5_1", -3.05, 0.38, 0.90),
+        ("TB5_2", -4.20, 0.38, 0.90),
+        ("HDMI", -5.75, 1.50, 0.46),
     ]
     for name, x, w, h in parts:
         add_socket("Port_" + name, x, zc, w, h, y_mouth, mats, inward=-1.0)
-    add_round_socket("Port_Headphone", -6.95, zc, 0.26, y_mouth, mats, inward=-1.0)
+    # 3.5 mm jack at the bay's far end, clear of the HDMI's right edge
+    add_round_socket("Port_Headphone", -7.10, zc, 0.26, y_mouth, mats, inward=-1.0)
 
-    # Touch ID power button, at the far right of the bay in Apple's diagram.
-    # It is a separate control from the AC inlet and is easy to miss.
-    pw = add_cylinder("Port_PowerButton", 6.55, y_mouth - 0.06, zc + 1.05,
+    # Touch ID power button, at the far end of the bay in Apple's diagram,
+    # vertically centred like the rest of the row (it sat above the port line
+    # before, hanging outside the bay band).
+    pw = add_cylinder("Port_PowerButton", 7.05, y_mouth - 0.06, zc,
                       0.22, 0.10, mats["alu"], verts=32, axis="Y")
     return pw
 
@@ -718,9 +730,13 @@ def build_front_io(mats, body):
     # guide lists USB-C, USB-C, SDXC left to right, so in model space they run
     # from +X to -X.
     slots = [
-        ("Front_USBC_1", 7.40, 0.32, 0.90),
-        ("Front_USBC_2", 6.40, 0.32, 0.90),
-        ("Front_SDXC", 4.70, 1.30, 0.34),
+        # USB-C openings on the real part are vertical rounded slots, roughly
+        # 0.36 wide x 0.90 tall — the same shell as the rear Thunderbolt ports.
+        # The earlier build used 0.32 x 0.90 for the front (correct) but the
+        # rear row was the transposed 0.92 x 0.30, so the two disagreed.
+        ("Front_USBC_1", 7.40, 0.36, 0.90),
+        ("Front_USBC_2", 6.40, 0.36, 0.90),
+        ("Front_SDXC", 4.60, 1.30, 0.34),
     ]
     for name, x, w, h in slots:
         # Straddling convention: outer face 0.10cm proud of the skin, inner
