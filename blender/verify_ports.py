@@ -93,7 +93,7 @@ def main():
         fails += check("%s inside bay height" % k, b[4] >= zlo - 0.1 and b[5] <= zhi + 0.1,
                        "z %.2f..%.2f" % (b[4], b[5]))
 
-    # 5. front row: USB-C on the +X side (renders screen-left), LED on -X
+    # 4. front row: USB-C on the +X side (renders screen-left), LED on -X
     if "Front_SDXC" in front:
         b = front["Front_SDXC"]
         fails += check("front SDXC left of centre (screen-left)",
@@ -103,6 +103,39 @@ def main():
         b = front[k]
         print("    %-24s x %6.2f..%6.2f  w %.2f  h %.2f"
               % (k, b[0], b[1], b[1] - b[0], b[5] - b[4]))
+
+    # 6. the rear bay must read as a black cavity, not a bright silver recess.
+    # A boolean difference keeps the SHELL's material on the flipped inner
+    # faces, so the bay floor came out aluminium. Test the material, not the
+    # look: count non-cavity faces in the bay's y slab.
+    #
+    # The tolerance is 0.10 cm, not 0.02: the two perforation fields' frames
+    # sit at y = 9.75 (UPPER_DEPTH recess) and are part of the dark region.
+    # At 0.02 they fell outside the slab and 5 side-wall faces stayed silver,
+    # reading as bright ledges at each end of the port row.
+    body = bpy.data.objects["Body"]
+    mats = [m.name for m in body.data.materials]
+    cav = mats.index("Cavity_Black") if "Cavity_Black" in mats else -1
+    bay_depth = 0.42
+    y_lo, y_hi = 9.85 - bay_depth - 0.02, 9.85 - 0.15
+    zlo, zhi = 9.5 * 0.20 - 0.05, 9.5 * 0.50 + 0.05
+    inside = [p for p in body.data.polygons
+              if y_lo < p.center.y < y_hi and abs(p.center.x) < 8.05
+              and zlo < p.center.z < zhi]
+    silver = [p for p in inside
+              if cav < 0 or p.material_index != cav]
+    fails += check("rear bay interior is fully black",
+                   not silver, "%d/%d faces still aluminium"
+                   % (len(silver), len(inside)))
+
+    # 7. the underside must carry circular ventilation intakes
+    vents = [o for o in bpy.data.objects if o.name.startswith("VentBore_")]
+    fails += check("four round underside intakes", len(vents) == 4,
+                   "%d found" % len(vents))
+    for o in vents:
+        zmin = min((o.matrix_world @ Vector(c)).z for c in o.bound_box)
+        fails += check("%s sits inside the shell" % o.name, zmin > 0.0,
+                       "zmin %.2f" % zmin)
 
     print("\n%s (%d failures)" % ("PORTS_OK" if not fails else "PORTS_FAIL", fails))
     return fails

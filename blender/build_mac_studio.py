@@ -23,12 +23,19 @@ D = 19.7          # Y, depth
 H_TOTAL = 9.5     # Z, full height incl. feet
 FOOT_H = 0.2      # rubber feet height
 BODY_H = H_TOTAL - FOOT_H
-R_VERT = 1.6      # vertical corner radius
-# Top/bottom edge fillet. Kept small on purpose: a large fillet on a 9.5cm-tall
-# body reads as a tray with a raised rim rather than a solid aluminium block.
-# 0.35cm matches the crisp edge break on the real enclosure.
-R_HORZ = 0.35     # top/bottom edge fillet radius
-ARC_SEG = 8       # segments per rounded corner
+R_VERT = 1.05     # vertical corner radius. Apple calls the shell "a single piece
+                  # of aluminium"; the corner is a crisp machined break, NOT a
+                  # soft pillow. At 1.6 cm it was 8.1% of the 19.7 cm width and
+                  # every elevation read as a bulging pillow even though the
+                  # panel geometry was provably flat (99 front-face verts, all
+                  # at y = -9.8500, spread 0.0000 cm).
+R_HORZ = 0.48     # top/bottom edge fillet. Slightly LARGER than the vertical
+                  # corner: on the real part the top edge break is the softer
+                  # of the two, and 0.35 read as a hard machined edge.
+ARC_SEG = 20      # segments per rounded corner. At 8 the corner read as a
+                  # visible faceted curve — a flat-shaded 8-gon arc against a
+                  # 19.7 cm face is obvious, and it is most of what made the
+                  # silhouette look soft rather than machined.
 
 OUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "renders"))
 BLEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "mac_studio.blend"))
@@ -133,6 +140,28 @@ def cut_from_body(body, name, cx, cy, cz, sx, sy, sz, bevel=0.0, mats=None):
                      (mats or {}).get("cavity") or bpy.data.materials["Cavity_Black"],
                      bevel=bevel)
     return boolean_diff(body, cutter, "Cut_" + name)
+
+
+def paint_recess_black(obj, y_lo, y_hi, x_extent, z_lo, z_hi, slot=1):
+    """Force every face inside a rear recess to the cavity material.
+
+    A boolean difference flips the cutter's geometry to become the recess's
+    walls, but those flipped faces keep the SHELL's material index — the bay
+    ended up with 45 aluminium faces at its back wall (y=9.75), so the port bay
+    read as a bright silver recess instead of a black cavity. The cutter's own
+    material does not help: EXACT only carries a material across if the target
+    lacks the slot, and the target already has two.
+
+    Select by volume, not by normal: the recess's back wall has a normal
+    pointing *into* the bay, same as its side walls, so a normal test misses it.
+    """
+    me = obj.data
+    for p in me.polygons:
+        c = p.center
+        if (y_lo < c.y < y_hi and abs(c.x) < x_extent
+                and z_lo < c.z < z_hi):
+            p.material_index = slot
+    return obj
 
 
 def triangulate_caps(obj):
@@ -663,6 +692,15 @@ def build_rear_io(mats):
     cut_from_body(body, "RearBay", 0.0, y_face + 0.10 - bay_depth / 2.0, zc,
                   bay_x * 2.0, bay_depth + 0.20, bay_z1 - bay_z0,
                   bevel=0.35, mats=mats)
+    # the boolean leaves the bay's back wall shaded aluminium (it is the
+    # flipped original skin), which makes the whole recess read silver.
+    # The y window's upper bound is y_face - 0.15, not - 0.02, so it also
+    # catches the perforation fields' frames — they sit at y = 9.75 (the
+    # UPPER_DEPTH recess) and are part of the same dark region, but they are
+    # the fields' aluminium border, and left bright they read as short ledges
+    # at each end of the port row.
+    paint_recess_black(body, y_face - bay_depth - 0.02, y_face - 0.15,
+                       8.05, bay_z0 - 0.05, bay_z1 + 0.05)
 
     # Rear port order, from Apple's own rear hardware diagram
     # (/v/mac-studio/o/images/overview/connectivity/hw_back__*.jpg), read
@@ -746,6 +784,11 @@ def build_front_io(mats, body):
         # bbox by the cutter's overhang instead of shrinking it.
         cut_from_body(body, name, x, y_face + 0.20, zc, w + 0.20, 0.60, h + 0.20,
                       bevel=0.06, mats=mats)
+        # same flipped-skin problem as the rear bay: the slot's back wall is the
+        # original skin turned inward, and it keeps the aluminium material
+        paint_recess_black(body, y_face + 0.02, y_face + 0.55,
+                           abs(x) + w / 2.0 + 0.12, zc - h / 2.0 - 0.12,
+                           zc + h / 2.0 + 0.12)
         # The socket sits behind the skin opening. y_face is the outer skin at
         # -D/2, so "behind the skin" is larger y: inward=+1. (The rear panel
         # is at +D/2, where "behind" is smaller y: inward=-1.)
@@ -775,12 +818,35 @@ def build_front_io(mats, body):
 
 
 def build_bottom_details(mats):
-    """Four rubber feet + the Touch ID power button on the underside."""
+    """Underside: four feet, the Touch ID button, and the round vent intakes.
+
+    The real underside is not a bare plate. Between the four feet sit circular
+    ventilation intakes: a round recess going UP into the shell, with a dark
+    cavity and a raised lip. They are mouths, not bumps — the shell's underside
+    plane is z = FOOT_H (0.2 cm) and everything else stands on the floor, so
+    anything modelled as a dome below that plane would hang into the foot gap
+    and read as a lump. The model had no intakes at all, which is why the
+    bottom looked like a plain slab.
+    """
     for i, (sx, sy) in enumerate(((-1, -1), (1, -1), (-1, 1), (1, 1))):
         add_cylinder(
             "Foot_%d" % (i + 1), sx * 7.45, sy * 7.45, FOOT_H / 2.0,
             0.55, FOOT_H, mats["rubber"],
         )
+
+    # Circular ventilation intakes. The lip is a shallow ring standing at the
+    # underside plane; the bore is a dark cavity recessed above it.
+    for i, (bx, by) in enumerate(((-3.5, -3.5), (3.5, -3.5), (-3.5, 3.5), (3.5, 3.5))):
+        # dark cavity floor, set up inside the shell
+        add_cylinder("VentCavity_%d" % (i + 1), bx, by, FOOT_H + 0.55,
+                     0.62, 0.06, mats["cavity"], verts=40)
+        # bore wall: a short tube from the underside plane up to the cavity
+        add_cylinder("VentBore_%d" % (i + 1), bx, by, FOOT_H + 0.30,
+                     0.66, 0.62, mats["cavity"], verts=40)
+        # aluminium lip ring around the mouth, flush with the underside
+        add_cylinder("VentLip_%d" % (i + 1), bx, by, FOOT_H + 0.02,
+                     0.86, 0.05, mats["alu"], verts=48)
+
     # Touch ID power button, underside toward the rear-left
     add_cylinder("PowerButton", -5.60, 6.05, FOOT_H + 0.05, 0.56, 0.12, mats["port"])
     add_cylinder(
