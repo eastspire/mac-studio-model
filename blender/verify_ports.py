@@ -19,15 +19,29 @@ def world_bbox(o):
             min(p.z for p in pts), max(p.z for p in pts))
 
 
-def group_ports(prefix="Port_"):
-    """Collapse a socket's wall/back/tongue sub-meshes into one entry."""
+def group_ports():
+    """Collapse a socket's wall/back/tongue sub-meshes into one entry.
+
+    Both the rear row and the front panel are sockets, and they are named
+    differently on purpose: the rear is "Port_<name>" and the front is
+    "Front_<name>". Accept both prefixes, or the front row silently vanishes
+    from the report and every front check reads "missing".
+    """
     g = {}
     for o in bpy.data.objects:
-        if o.type != "MESH" or not o.name.startswith(prefix):
+        if o.type != "MESH":
+            continue
+        # only the two socket rows: rear "Port_<name>", front "Front_<name>".
+        # "Front_USBC_1" is a socket; "Foot_1" and "VentBore_2" are not, and
+        # letting them through would make the front-row centre checks fail on
+        # geometry that is not a connector.
+        if not (o.name.startswith("Port_")
+                or (o.name.startswith("Front_")
+                    and not o.name.startswith("Front_LED"))):
             continue
         base = o.name
         for suf in ("_w_top", "_w_bot", "_w_l", "_w_r", "_back",
-                    "_tongue", "_shell", "_pin"):
+                    "_tongue", "_shell", "_pin", "_lip"):
             base = base.replace(suf, "")
         bb = world_bbox(o)
         cur = g.get(base)
@@ -82,8 +96,12 @@ def main():
     fails += check("rear row within +/- 7.4 cm (min)", min(xs) >= -7.4,
                    "min x %.2f" % min(xs))
 
-    # 4. every rear port must be vertically centred in the bay band
-    zlo, zhi = 9.5 * 0.20, 9.5 * 0.50
+    # 4. every rear port must be vertically centred in the bay band.
+    # These are the measured band, not the model constants: 27%..47% of the
+    # 9.5 cm height, from Apple's rear hardware diagram. Kept as literals
+    # because this script deliberately reads the built .blend on its own and
+    # does not import the builder — a stale import would hide a wrong build.
+    zlo, zhi = 9.5 * 0.27, 9.5 * 0.47
     zc = (zlo + zhi) / 2.0
     for k in order:
         b = rear[k]
@@ -93,40 +111,56 @@ def main():
         fails += check("%s inside bay height" % k, b[4] >= zlo - 0.1 and b[5] <= zhi + 0.1,
                        "z %.2f..%.2f" % (b[4], b[5]))
 
-    # 4. front row: USB-C on the +X side (renders screen-left), LED on -X
-    if "Front_SDXC" in front:
-        b = front["Front_SDXC"]
-        fails += check("front SDXC left of centre (screen-left)",
-                       b[0] > 0, "x %.2f" % b[0])
+    # 5. front row positions, measured from Apple's hw_front diagram.
+    # Image-left is model +X (the diagram shows the machine from in front),
+    # and the measured centres were 16.5%, 24.0%, 37.7% and 83.5% of the panel
+    # width. Allow 0.35 cm of slack for the diagram's own perspective.
+    front_want = {
+        "Front_USBC_1": 6.60,
+        "Front_USBC_2": 5.12,
+        "Front_SDXC": 2.42,
+        "Front_Headphone": -6.60,
+    }
+    for k, want in front_want.items():
+        if k not in front:
+            fails += check("%s present" % k, False, "missing")
+            continue
+        b = front[k]
+        mid = (b[0] + b[1]) / 2.0
+        fails += check("%s at measured x" % k, abs(mid - want) <= 0.35,
+                       "%.2f (want %.2f)" % (mid, want))
+
+    # the M5 Max has no front status LED — Touch ID is on the underside
+    leds = [o for o in bpy.data.objects if o.name.startswith("Front_LED")]
+    fails += check("no front status LED", not leds,
+                   "%d found" % len(leds))
     print("\nFRONT row:")
     for k in sorted(front, key=lambda k: -front[k][0]):
         b = front[k]
         print("    %-24s x %6.2f..%6.2f  w %.2f  h %.2f"
               % (k, b[0], b[1], b[1] - b[0], b[5] - b[4]))
 
-    # 6. the rear bay must read as a black cavity, not a bright silver recess.
-    # A boolean difference keeps the SHELL's material on the flipped inner
-    # faces, so the bay floor came out aluminium. Test the material, not the
-    # look: count non-cavity faces in the bay's y slab.
+    # 6. the port bay must be a SHALLOW aluminium step, not a black pocket.
     #
-    # The tolerance is 0.10 cm, not 0.02: the two perforation fields' frames
-    # sit at y = 9.75 (UPPER_DEPTH recess) and are part of the dark region.
-    # At 0.02 they fell outside the slab and 5 side-wall faces stayed silver,
-    # reading as bright ledges at each end of the port row.
+    # This check was originally "no face in the bay may be aluminium" — the
+    # wrong direction. Apple's rear diagram reads 6% / 0% / 9% dark across the
+    # 55-70% band, i.e. the band is solid metal; the model's black-painted bay
+    # measured 74% / 59% / 66% there and read as a slot. So assert the
+    # opposite: the bay floor is mostly metal, and the only dark faces belong
+    # to the connector mouths, which are separate objects.
     body = bpy.data.objects["Body"]
     mats = [m.name for m in body.data.materials]
-    cav = mats.index("Cavity_Black") if "Cavity_Black" in mats else -1
-    bay_depth = 0.42
-    y_lo, y_hi = 9.85 - bay_depth - 0.02, 9.85 - 0.15
-    zlo, zhi = 9.5 * 0.20 - 0.05, 9.5 * 0.50 + 0.05
+    alu = mats.index("Aluminium_Silver") if "Aluminium_Silver" in mats else 0
+    bay_depth = 0.18
+    y_lo, y_hi = 9.85 - bay_depth - 0.02, 9.85 - 0.02
+    zlo, zhi = 9.5 * 0.27 - 0.05, 9.5 * 0.47 + 0.05
     inside = [p for p in body.data.polygons
               if y_lo < p.center.y < y_hi and abs(p.center.x) < 8.05
               and zlo < p.center.z < zhi]
-    silver = [p for p in inside
-              if cav < 0 or p.material_index != cav]
-    fails += check("rear bay interior is fully black",
-                   not silver, "%d/%d faces still aluminium"
-                   % (len(silver), len(inside)))
+    dark = [p for p in inside if p.material_index != alu]
+    share = len(dark) / max(1, len(inside)) * 100
+    fails += check("rear bay floor is aluminium, not a black pocket",
+                   share < 25.0, "%.0f%% of %d faces non-metal" % (share, len(inside)))
 
     # 7. the underside must carry circular ventilation intakes
     vents = [o for o in bpy.data.objects if o.name.startswith("VentBore_")]

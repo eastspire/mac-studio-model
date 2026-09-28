@@ -384,10 +384,41 @@ GRILLE_BAND_Z0 = 0.42   # groove floor
 GRILLE_BAND_Z1 = 1.62   # groove ceiling (a 0.08 cm lip of flat skin above)
 GRILLE_LEVELS = 4       # extra loft levels across the band, for crisp walls
 
-# The upper rear/side field, as fractions of body height (0 = feet, 1 = top).
-# 0% of the chassis is its top, so "0..50% from the top" is 0.50..1.00 here.
-UPPER_Z0 = Z_TOTAL * 0.50
-UPPER_Z1 = Z_TOTAL * 0.93
+# The three rear zones, as fractions of the 9.5 cm height.
+#
+# Measured from Apple's own rear hardware diagram (apple.com/hk/mac-studio/ ->
+# hw_back__*.jpg, 656x322). Sampling the dark-pixel share in 5% horizontal
+# bands across the chassis gives an unambiguous read:
+#
+#     0- 5%   0.0%   smooth
+#     5-55%  ~43%    perforated field
+#    55-70%   6%    the port band (solid, ports cut into it)
+#    70-80%  ~28%    perforated field
+#    80-90%   3%    solid transition
+#    90-100% ~22%    the base band's perforation
+#
+# So the port band sits at 55..70% from the TOP, not at the 50..80% the first
+# pass assumed, and the upper field reaches 55% rather than 50%.
+#
+# The 55..70% figure is where the dark CONNECTOR OPENINGS sit, not the extent
+# of the recess. The recess has to clear its tallest connector: the RJ45 is
+# 1.28 cm tall, and at the literal 15% (1.43 cm) that leaves 0.075 cm of
+# aluminium above and below it, which is not a machined bay, it is a slot the
+# jack is wedged into. 27..47% gives 1.90 cm, a real 0.3 cm margin top and
+# bottom, and still keeps the bay clear of both perforated fields.
+BAY_Z0 = Z_TOTAL * 0.27   # 2.57 cm
+BAY_Z1 = Z_TOTAL * 0.47   # 4.47 cm
+
+# The upper field: 5%..53% of the height from the top, stopping above the bay.
+#
+# The top bound is 5% down, not the diagram's literal 5%, because 5% of 9.5 cm
+# is 0.475 cm and the top fillet R_HORZ occupies z 9.02..9.50. Ending the field
+# at 0.95*H = 9.03 put its upper edge just inside that fillet, where the shell
+# has already curved inward — the recess then ate the outermost skin and the
+# rear panel came out 0.09 mm short in Y. 0.94 keeps a clear 0.09 cm of flat
+# metal above the field, inside the fillet's straight run.
+UPPER_Z0 = Z_TOTAL * 0.47
+UPPER_Z1 = Z_TOTAL * 0.94
 UPPER_DEPTH = 0.10
 UPPER_FRONT_GAP = 0.34   # the field stops this far short of the front face
 UPPER_LEVELS = 5         # loft levels across the field
@@ -396,9 +427,9 @@ UPPER_LEVELS = 5         # loft levels across the field
 UPPER_PITCH = 0.20
 UPPER_HOLE_R = 0.052
 
-# The lower rear field: below the port bay, 80%..100% from the top.
-LOWER_F_Z0 = Z_TOTAL * 0.18
-LOWER_F_Z1 = Z_TOTAL * 0.34
+# The lower field: 70%..80% from the top, between the port band and the base.
+LOWER_F_Z0 = Z_TOTAL * 0.20
+LOWER_F_Z1 = Z_TOTAL * 0.30
 LOWER_F_DEPTH = 0.10
 LOWER_F_GAP = 0.34
 LOWER_F_LEVELS = 3
@@ -480,7 +511,16 @@ def build_grille_field(mats, name, z_lo, z_hi, depth, pitch, hole_r,
     verts, faces = [], []
     placed = 0
     for row in range(rows):
-        z0 = z_lo + (z_hi - z_lo) / 2.0 - row * row_dz
+        # Rows run from the TOP of the band down to the bottom, evenly.
+        #
+        # This used to be
+        #     z0 = z_lo + (z_hi - z_lo) / 2.0 - row * row_dz
+        # which anchors the first row at the band's MIDPOINT and then walks
+        # down, so the upper half of the field was never built: the upper
+        # rear field spans z 4.47..8.93 but only 4.47..6.70 got holes, and a
+        # pixel diff against Apple's rear diagram showed the perforated band
+        # starting at 25% of the height instead of 5%.
+        z0 = z_hi - row * row_dz
         s = (pitch / 2.0) if row % 2 else 0.0
         while s < total:
             px, py, tx, ty = point_at(s)
@@ -672,16 +712,18 @@ def add_round_socket(name, x, z, r, y_mouth, mats, depth=0.30, inward=1.0):
 def build_rear_io(mats):
     """Rear bay is a real recess (boolean); the connectors sit inside it."""
     y_face = D / 2.0
-    # Port bay geometry, from Apple's rear diagram read against a 10% grid:
-    # the solid band runs 50%..80% down from the top, so its height is 30% of
-    # the chassis. The earlier bay was 4.1 cm tall on a 9.5 cm body — 43% — and
-    # 17.4 cm wide, i.e. it covered almost the whole rear panel and swallowed
-    # both perforated fields. Its top edge also sat ABOVE UPPER_Z0, so the
-    # boolean removed the upper field outright.
+    # Port bay geometry, from Apple's rear diagram. The solid band runs
+    # 55%..70% down from the top, so its height is 15% of the 9.5 cm chassis
+    # (1.43 cm). The earlier bay was 4.1 cm tall — 43% — and 17.4 cm wide, so
+    # it covered almost the whole rear panel and swallowed both perforated
+    # fields. Its top edge also sat ABOVE the upper field's floor, so the
+    # boolean removed that field outright.
     bay_x = 7.60
-    bay_z0 = Z_TOTAL * 0.20
-    bay_z1 = Z_TOTAL * 0.50
-    bay_depth = 0.42
+    bay_z0, bay_z1 = BAY_Z0, BAY_Z1
+    # 0.18 cm, not 0.42. A 15.2 x 1.9 cm panel does not have a 4 mm deep
+    # pocket in it — that is a slot, and it renders as a black bar. The real
+    # bay is a shallow step so the connector collars stand slightly proud.
+    bay_depth = 0.18
     zc = (bay_z0 + bay_z1) / 2.0
     body = bpy.data.objects["Body"]
 
@@ -692,15 +734,35 @@ def build_rear_io(mats):
     cut_from_body(body, "RearBay", 0.0, y_face + 0.10 - bay_depth / 2.0, zc,
                   bay_x * 2.0, bay_depth + 0.20, bay_z1 - bay_z0,
                   bevel=0.35, mats=mats)
-    # the boolean leaves the bay's back wall shaded aluminium (it is the
-    # flipped original skin), which makes the whole recess read silver.
-    # The y window's upper bound is y_face - 0.15, not - 0.02, so it also
-    # catches the perforation fields' frames — they sit at y = 9.75 (the
-    # UPPER_DEPTH recess) and are part of the same dark region, but they are
-    # the fields' aluminium border, and left bright they read as short ledges
-    # at each end of the port row.
-    paint_recess_black(body, y_face - bay_depth - 0.02, y_face - 0.15,
-                       8.05, bay_z0 - 0.05, bay_z1 + 0.05)
+    # The bay floor is ALUMINIUM, not black.
+    #
+    # The first pass painted the whole recess Cavity_Black, which was the wrong
+    # reading of "the port bay should not look silver": against Apple's rear
+    # diagram the band at 55-70% of the height reads 6% / 0% / 9% dark, i.e.
+    # solid metal, and painting it black put the model at 74% / 59% / 66% — the
+    # bay became a black slot.
+    #
+    # The bay is a machined step in one piece of aluminium, so its floor AND
+    # its walls are aluminium. A boolean difference leaves the walls carrying
+    # Cavity_Black (the cutter's material), which is what kept 68 faces dark
+    # after the depth came down from 0.42 to 0.18 cm. Repaint the whole recess
+    # back to the shell material: the only dark geometry in the band should be
+    # the connector mouths, and those are separate objects.
+    body_mat = bpy.data.materials["Aluminium_Silver"]
+    slot_alu = [i for i, m in enumerate(body.data.materials)
+                if m == body_mat]
+    alu_slot = slot_alu[0] if slot_alu else 0
+    y_lo = y_face - bay_depth - 0.02
+    y_hi = y_face - 0.02
+    repainted = 0
+    for p in body.data.polygons:
+        c = p.center
+        if (y_lo < c.y < y_hi and abs(c.x) < bay_x + 0.6
+                and bay_z0 - 0.10 < c.z < bay_z1 + 0.10
+                and p.material_index != alu_slot):
+            p.material_index = alu_slot
+            repainted += 1
+    print("  RearBay: %d faces repainted to aluminium" % repainted)
 
     # Rear port order, from Apple's own rear hardware diagram
     # (/v/mac-studio/o/images/overview/connectivity/hw_back__*.jpg), read
@@ -715,7 +777,10 @@ def build_rear_io(mats):
     #
     # That diagram is a straight-on REAR view, which in this model is the +Y
     # side, so its left-to-right is the NEGATIVE of our +X. Mirror the x values.
-    y_mouth = y_face - 0.24
+    # The connector mouths sit just outside the bay floor: the floor is at
+    # y_face - bay_depth = 9.67, and a USB-C shell stands 0.10 cm proud of
+    # the outer skin, so its mouth is at 9.75.
+    y_mouth = y_face - 0.10
     # x positions are MODEL space, mirrored from the diagram's visual order.
     # The bay is 15.2 cm wide, so keep everything within +/- 7.4.
     #
@@ -754,27 +819,35 @@ def build_rear_io(mats):
 
 
 def build_front_io(mats, body):
-    """Front: 2x USB-C + SDXC (M5 Max layout), low on the left; LED at right.
+    """Front: 2x USB-C + SDXC on the left, 3.5 mm jack on the right.
 
     Each opening is booleaned into the shell so it reads as a real slot with
     an inner shadow, not a black sticker on the skin. A bright chamfer ring
     around each opening is what actually sells the depth: without a specular
     edge catching light, a recessed hole reads flat in a studio render.
+
+    Positions are measured, not guessed. From Apple's own front hardware
+    diagram (apple.com/hk/mac-studio/ -> hw_front__*.jpg, 656x322), the feature
+    centres sit at 16.5%, 24.0%, 37.7% and 83.5% of the panel width, read
+    left-to-right in that image. The diagram shows the machine from in front,
+    which is the -Y side here, so image-left is model +X and each position maps
+    to x = W/2 - (pct/100)*W. That puts them at +6.60, +5.12, +2.42 and -6.60.
+
+    The right-hand round feature is the 3.5 mm headphone jack, NOT a status
+    light. The earlier build modelled it as an emissive LED at x = -7.60, which
+    is both the wrong function and 1.0 cm too far out.
     """
     y_face = -D / 2.0
     zc = 2.55
-    # Apple's guide shows the FRONT view as seen from in front of the machine,
-    # which is the -Y side here — the same mirror situation as the rear. The
-    # guide lists USB-C, USB-C, SDXC left to right, so in model space they run
-    # from +X to -X.
     slots = [
         # USB-C openings on the real part are vertical rounded slots, roughly
         # 0.36 wide x 0.90 tall — the same shell as the rear Thunderbolt ports.
         # The earlier build used 0.32 x 0.90 for the front (correct) but the
         # rear row was the transposed 0.92 x 0.30, so the two disagreed.
-        ("Front_USBC_1", 7.40, 0.36, 0.90),
-        ("Front_USBC_2", 6.40, 0.36, 0.90),
-        ("Front_SDXC", 4.60, 1.30, 0.34),
+        ("Front_USBC_1", 6.60, 0.36, 0.90),
+        ("Front_USBC_2", 5.12, 0.36, 0.90),
+        # SD slot spans 31%..44% of the panel width -> x +1.18..+3.74
+        ("Front_SDXC", 2.42, 1.30, 0.34),
     ]
     for name, x, w, h in slots:
         # Straddling convention: outer face 0.10cm proud of the skin, inner
@@ -795,26 +868,24 @@ def build_front_io(mats, body):
         add_socket(name, x, zc, w, h, y_face + 0.10, mats, depth=0.34, wall=0.045,
                    inward=1.0)
 
-    # status LED: shallow bore plus a real, lit lens
-    # The guide puts the status light on the opposite side from the USB-C
-    # cluster, so it mirrors to -X here.
-    cut_from_body(body, "Front_LED", -7.60, y_face + 0.20, zc, 0.24, 0.60, 0.24,
-                  bevel=0.08, mats=mats)
-    led = bpy.data.materials["Status_LED"]
-    led_bsdf = next(n for n in led.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
-    led_bsdf.inputs["Emission Color"].default_value = (0.80, 0.92, 1.0, 1.0)
-    led_bsdf.inputs["Emission Strength"].default_value = 6.0
-    led_bsdf.inputs["Base Color"].default_value = (0.9, 0.95, 1.0, 1.0)
-    # lens sits 0.16cm inside the bore mouth, flush enough to be visible
-    lens = add_cylinder("Front_LED", -7.60, y_face + 0.16, zc, 0.085, 0.04, led,
-                        verts=24, axis="Y")
-    # small point light so the LED actually spills onto the surrounding panel
-    ld = bpy.data.lights.new("LEDglow", "POINT")
-    ld.energy, ld.color, ld.shadow_soft_size = 2.5, (0.75, 0.88, 1.0), 0.12
-    glow = bpy.data.objects.new("LEDglow", ld)
-    glow.location = (-7.60, y_face - 0.10, zc)
-    bpy.context.collection.objects.link(glow)
-    return lens
+    # 3.5 mm headphone jack on the right, at 83.5% of the panel width.
+    #
+    # This was previously an emissive status LED at x = -7.60. Apple's front
+    # hardware diagram shows a plain round jack on the right and no light at
+    # all — the M5 Max has no front status LED, and the Touch ID button is on
+    # the underside, not here. So the cut, the lens and the spill light all
+    # go; what stays is a bored round socket with a dark cavity.
+    #
+    # add_round_socket only builds the tube; the skin still has to be opened
+    # for it, otherwise the jack sits buried under the panel.
+    jack_x = -6.60
+    cut_from_body(body, "Front_Headphone", jack_x, y_face + 0.20, zc,
+                  0.66, 0.60, 0.66, bevel=0.08, mats=mats)
+    paint_recess_black(body, y_face + 0.02, y_face + 0.55,
+                       abs(jack_x) + 0.45, zc - 0.45, zc + 0.45)
+    add_round_socket("Front_Headphone", jack_x, zc, 0.26, y_face + 0.10, mats,
+                     depth=0.34, inward=1.0)
+    return jack_x
 
 
 def build_bottom_details(mats):
