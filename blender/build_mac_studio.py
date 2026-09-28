@@ -231,6 +231,9 @@ def build_body(mats):
     verts, faces, mats_per_face = [], [], []
     hx, hy = W / 2.0, D / 2.0
     gap_t = UPPER_FRONT_GAP / (2.0 * hy)   # front-corner gap as a 0..1 frac
+    # Past this t the recess is at FULL depth. The taper is a short arc beside
+    # the front panel, not the whole perimeter — see perimeter_factor.
+    taper_end = FIELD_TAPER_CM / (2.0 * hy) + gap_t
 
     for z in levels:
         base_d = fillet_inset(z, z_lo, z_hi)
@@ -249,14 +252,7 @@ def build_body(mats):
         ux0, uy0 = hx - base_d, hy - base_d
         in_base = (GRILLE_BAND_Z0 - 1e-6 <= z <= GRILLE_BAND_Z1 + 1e-6)
         for px, py in prof:
-            t = (py + uy0) / (2.0 * uy0)          # 0 at the front, 1 at the rear
-            if t >= 1.0 - gap_t:
-                ff = 1.0
-            elif t <= gap_t:
-                ff = 1.0 if in_base else 0.0
-            else:
-                u = (t - gap_t) / (1.0 - 2.0 * gap_t)
-                ff = u * u * (3.0 - 2.0 * u)     # smoothstep
+            ff = perimeter_factor(py, uy0, gap_t, taper_end, in_base)
             d = base_d + grille_inset(z, ff)
             verts.append((px / ux0 * (hx - d), py / uy0 * (hy - d), z))
 
@@ -453,6 +449,11 @@ UPPER_Z1 = Z_TOTAL * 0.94
 # shallow enough that the floor between them still catches light.
 UPPER_DEPTH = 0.15
 UPPER_FRONT_GAP = 0.34   # the field stops this far short of the front face
+# Arc length over which the recess ramps from 0 to full depth, measured from
+# the end of UPPER_FRONT_GAP. Only the corner beside the front panel tapers;
+# the two sides and the rear sit at full depth. Keeping this short is what puts
+# the side perforations on the surface instead of inside the shell.
+FIELD_TAPER_CM = 2.0
 UPPER_LEVELS = 5         # loft levels across the field
 # Hole size is set from the OPEN AREA, not by eye. A pixel diff against
 # Apple's rear diagram puts the perforated field at 42-45% dark pixels per
@@ -608,21 +609,60 @@ def build_grille_field(mats, name, z_lo, z_hi, depth, pitch, hole_r,
     return obj
 
 
+def perimeter_factor(py, half_depth, gap_t, taper_end, in_base):
+    """How much of the recess depth applies at perimeter position `py`.
+
+    `py` is the UNINSET profile coordinate, so 0 is the middle of the left or
+    right wall and -half_depth is the front face. `taper_end` is the value of
+    t past which the recess is at full depth.
+
+    This MUST be the same function the hole placement uses, or the two drift
+    apart and the holes end up buried: the recess is what makes the skin stand
+    back, and if it is shallower than the tube length the tube is inside solid
+    metal and invisible from outside. That is exactly what happened — the loft
+    smoothstepped across the whole perimeter, the sides landed at 0.5, the
+    recess came out 0.075 cm against a 0.15 cm tube, and a 13x13 ray grid over
+    the right face hit the grille zero times.
+    """
+    t = (py + half_depth) / (2.0 * half_depth)   # 0 at the front, 1 at the rear
+    if t >= taper_end:
+        return 1.0
+    if t <= gap_t:
+        # the base band wraps the front too; the other fields do not
+        return 1.0 if in_base else 0.0
+    u = (t - gap_t) / (taper_end - gap_t)
+    return u * u * (3.0 - 2.0 * u)               # smoothstep
+
+
 def field_factor(gap_cm):
     """Perimeter mask: 1.0 on the rear and sides, 0.0 within `gap_cm` of the front.
 
     The front face is where py is most negative, so the mask is a smoothstep on
     how far around from that face a point sits.
+
+    The previous version smoothstepped across the WHOLE remaining perimeter, from
+    the front gap all the way to the rear. That put the side faces — py = 0,
+    t = 0.5 — at exactly 0.5, so the recess was only half depth there (0.075 cm
+    against a full 0.15) while the hole tubes were still cut to the full depth.
+    The holes ended up buried inside the shell, invisible from outside: a
+    13x13 ray grid over the right face hit UpperGrille zero times, and the
+    grille's own side vertices sat at x 9.63..9.77 behind skin at x 9.85.
+
+    The transition now completes within the first `span_cm` of arc from the gap
+    and stays at 1.0 for everything past that, so the sides and the rear get the
+    full recess and only the corner beside the front panel tapers.
     """
-    gt = gap_cm / (2.0 * (D / 2.0))
+    half = D / 2.0
+    gt = gap_cm / (2.0 * half)
+    st = FIELD_TAPER_CM / (2.0 * half) + gt
 
     def f(py):
-        t = (py + D / 2.0) / D            # 0 at the front, 1 at the rear
-        if t >= 1.0 - gt:
+        t = (py + half) / (2.0 * half)   # 0 at the front, 1 at the rear
+        if t >= st:
             return 1.0
         if t <= gt:
             return 0.0
-        u = (t - gt) / (1.0 - 2.0 * gt)
+        u = (t - gt) / (st - gt)
         return u * u * (3.0 - 2.0 * u)   # smoothstep
     return f
 
