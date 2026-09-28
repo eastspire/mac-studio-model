@@ -28,15 +28,24 @@ EXCLUDE = {"Floor", "BounceL", "BounceR"}
 
 # name, azimuth(deg), elevation(deg), lens(mm), target z-fraction, hide floor
 # azimuth 270 deg = -Y = front of the machine
+#
+# Elevations are low on purpose. Apple's own product and hardware shots are
+# near eye level, and a 12-degree downward tilt foreshortens the rear panel
+# enough to hide the three-zone structure (upper perforation / port band /
+# lower perforation) that a side-by-side comparison is checking for. Keep the
+# elevation views explicit rather than folding a tilt into the three-quarter.
 VIEWS = [
-    ("01_front", 270.0, 12.0, 62.0, 0.5, False),
-    ("02_side", 180.0, 6.0, 62.0, 0.5, False),
-    ("03_rear", 90.0, 12.0, 62.0, 0.5, False),
+    ("01_front", 270.0, 4.0, 62.0, 0.5, False),
+    ("02_side", 180.0, 3.0, 62.0, 0.5, False),
+    ("03_rear", 90.0, 4.0, 62.0, 0.5, False),
     ("04_hero", 215.0, 34.0, 58.0, 0.45, False),
     ("05_top", 270.0, 78.0, 62.0, 0.5, False),
     ("06_bottom", 270.0, -62.0, 62.0, 0.5, True),
-    ("07_front_closeup", 270.0, 4.0, 90.0, 0.28, False),
-    ("08_rear_closeup", 90.0, 16.0, 90.0, 0.45, False),
+    ("07_front_closeup", 270.0, 2.0, 90.0, 0.28, False),
+    ("08_rear_closeup", 90.0, 4.0, 90.0, 0.45, False),
+    # Dead-level rear elevation, matching the framing of Apple's own hardware
+    # diagram so the two can be compared region for region.
+    ("12_rear_flat", 90.0, 0.0, 70.0, 0.5, False),
     # Low three-quarter view hugging the base band. This is the only angle that
     # shows the perforations: from straight below the holes are edge-on, and
     # from eye level the band is a 1.6 cm strip hidden behind the machine.

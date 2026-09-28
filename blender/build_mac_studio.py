@@ -183,19 +183,46 @@ def build_body(mats):
     steps = 8
     for i in range(steps + 1):                       # bottom fillet
         levels.append(z_lo + R_HORZ * (1.0 - math.cos(math.pi / 2 * i / steps)))
-    # the band gets its own close-spaced levels so the recess has crisp walls
-    for i in range(GRILLE_LEVELS + 1):
+    for i in range(GRILLE_LEVELS + 1):               # base band
         levels.append(z_g0 + (z_g1 - z_g0) * i / GRILLE_LEVELS)
-    levels.append(z_lo + (z_hi - z_lo) / 2.0)         # straight band
+    for i in range(LOWER_F_LEVELS + 1):           # lower rear field
+        levels.append(LOWER_F_Z0 + (LOWER_F_Z1 - LOWER_F_Z0)
+                      * i / LOWER_F_LEVELS)
+    for i in range(UPPER_LEVELS + 1):                # upper rear/side field
+        levels.append(UPPER_Z0 + (UPPER_Z1 - UPPER_Z0) * i / UPPER_LEVELS)
     for i in range(steps + 1):                       # top fillet
         levels.append(z_hi - R_HORZ * (1.0 - math.cos(math.pi / 2 * i / steps)))
+    # A field's top edge can sit above the midpoint, so appending field levels
+    # before the straight band and the top fillet leaves the list out of order
+    # and the loft folds through itself — which showed up as a bounding box
+    # 4.6 cm short in Z rather than an error. Sort and dedupe; a level list
+    # must be strictly increasing for the loft to be a solid.
+    levels = sorted(set(round(v, 4) for v in levels))
 
     verts, faces, mats_per_face = [], [], []
     hx, hy = W / 2.0, D / 2.0
+    gap_t = UPPER_FRONT_GAP / (2.0 * hy)   # front-corner gap as a 0..1 frac
+
     for z in levels:
-        d = fillet_inset(z, z_lo, z_hi) + grille_inset(z)
-        for px, py in rounded_rect(hx - d, hy - d, R_VERT - d):
-            verts.append((px, py, z))
+        base_d = fillet_inset(z, z_lo, z_hi)
+        prof = rounded_rect(hx - base_d, hy - base_d, R_VERT - base_d)
+        # The upper perforated field stops short of the front face, so the
+        # recess depth is a function of position around the perimeter, not just
+        # of z. Measure it on the UNINSET profile, then re-proportion each point
+        # to the inset profile — scaling by the profile's own extents keeps the
+        # rounded corners correct instead of squashing them.
+        ux0, uy0 = hx - base_d, hy - base_d
+        for px, py in prof:
+            t = (py + uy0) / (2.0 * uy0)          # 0 at the front, 1 at the rear
+            if t >= 1.0 - gap_t:
+                ff = 1.0
+            elif t <= gap_t:
+                ff = 0.0
+            else:
+                u = (t - gap_t) / (1.0 - 2.0 * gap_t)
+                ff = u * u * (3.0 - 2.0 * u)     # smoothstep
+            d = base_d + grille_inset(z, ff)
+            verts.append((px / ux0 * (hx - d), py / uy0 * (hy - d), z))
 
     n = len(rounded_rect(hx, hy, R_VERT))
     for li in range(len(levels) - 1):
@@ -301,96 +328,103 @@ def add_cylinder(name, cx, cy, cz, r, h, mat, verts=48, axis="Z"):
 # field wrapping around the front and side corners. Holes are small circles in
 # staggered rows, not hexagons. (Verified against Apple's own product photos:
 # the front face is smooth silver above this band.)
-GRILLE_H = 1.60    # height of the perforated band
+# Ventilation, laid out from Apple's own rear hardware diagram
+# (/v/mac-studio/o/images/overview/connectivity/hw_back__*.jpg), read against a
+# 10% grid overlay on the chassis silhouette:
+#
+#   0% .. 50% from the top   perforated field
+#   50% .. 80%              solid band holding the port bay
+#   80% .. 100%             perforated field again
+#
+# So the rear is perforated top AND bottom with a plain strip between them —
+# not a narrow base band. An earlier build had only the bottom band and a
+# smooth upper rear, which is the single biggest error this file had.
+#
+# The front panel is smooth silver above its base band (Apple's front diagram
+# and the straight-on product shot both confirm), so the upper field stops
+# short of the front face and tapers off around the front corners.
+Z_TOTAL = H_TOTAL
+GRILLE_H = 1.60    # height of the base band (front and sides only)
 GRILLE_Z0 = 1.70   # band top; below it is the smooth solid lip
 GRILLE_PITCH = 0.22
 GRILLE_HOLE_R = 0.058
-GRILLE_RECESS = 0.14   # how deep the band groove is cut into the shell
+GRILLE_RECESS = 0.14   # how deep the groove is cut into the shell
 
-# The groove is modelled directly into the body loft, so these describe the
-# recess the hole tubes sit in. Kept separate from GRILLE_Z0/H because the
-# builder owns the exact span; the tube builder only needs the floor depth.
+# The base band, all around. Modelled directly into the body loft.
 GRILLE_BAND_Z0 = 0.42   # groove floor
 GRILLE_BAND_Z1 = 1.62   # groove ceiling (a 0.08 cm lip of flat skin above)
 GRILLE_LEVELS = 4       # extra loft levels across the band, for crisp walls
 
+# The upper rear/side field, as fractions of body height (0 = feet, 1 = top).
+# 0% of the chassis is its top, so "0..50% from the top" is 0.50..1.00 here.
+UPPER_Z0 = Z_TOTAL * 0.50
+UPPER_Z1 = Z_TOTAL * 0.93
+UPPER_DEPTH = 0.10
+UPPER_FRONT_GAP = 0.34   # the field stops this far short of the front face
+UPPER_LEVELS = 5         # loft levels across the field
+# Finer than the base band — Apple's diagram shows a denser grid up there —
+# but the same ~22% open area.
+UPPER_PITCH = 0.20
+UPPER_HOLE_R = 0.052
 
-def grille_inset(z):
-    """Extra profile inset at height `z` — the perforated band's recess.
+# The lower rear field: below the port bay, 80%..100% from the top.
+LOWER_F_Z0 = Z_TOTAL * 0.18
+LOWER_F_Z1 = Z_TOTAL * 0.34
+LOWER_F_DEPTH = 0.10
+LOWER_F_GAP = 0.34
+LOWER_F_LEVELS = 3
+
+
+def grille_inset(z, front_factor=1.0):
+    """Extra profile inset at height `z` — the three ventilation recesses.
+
+    * base band   z 0.42..1.62 — wraps the whole perimeter
+    * upper field z 50%..93% of height — rear and sides only
+    * lower field z 18%..34% of height — rear and sides only, below the ports
+
+    `front_factor` scales the inset on the front face: 1.0 keeps the front's
+    base band, 0.0 leaves the front completely smooth. The two rear fields pass
+    through 0 there, so the front panel stays solid silver all the way up.
 
     Steps rather than ramps: the real part has a flat groove floor and a sharp
-    upper edge, not a chamfer.
+    edge, not a chamfer.
     """
-    if z < GRILLE_BAND_Z0 - 1e-6 or z > GRILLE_BAND_Z1 + 1e-6:
-        return 0.0
-    return GRILLE_RECESS
+    if GRILLE_BAND_Z0 - 1e-6 <= z <= GRILLE_BAND_Z1 + 1e-6:
+        return GRILLE_RECESS * front_factor
+    if UPPER_Z0 - 1e-6 <= z <= UPPER_Z1 + 1e-6:
+        return UPPER_DEPTH * front_factor
+    if LOWER_F_Z0 - 1e-6 <= z <= LOWER_F_Z1 + 1e-6:
+        return LOWER_F_DEPTH * front_factor
+    return 0.0
 
 
-def build_grille_band(mats, body, pitch=GRILLE_PITCH, hole_r=GRILLE_HOLE_R, seg=10):
-    """Perforated band wrapping the lower perimeter, as real geometry.
+def build_grille_field(mats, name, z_lo, z_hi, depth, pitch, hole_r,
+                       front_factor, seg=8, rows_cap=40):
+    """Punch a lattice of hole tubes into a recessed field, radially outward.
 
-    Each hole is a short *closed* cylinder punched radially inward from the
-    band's outer surface, the band being a real opening in the shell rather
-    than a dark decal sitting on it.
+    Shared by the base band (which wraps the whole perimeter) and the upper
+    rear/side field (which stops short of the front). `front_factor(py)` scales
+    how much of the field exists at a given point around the profile, so the
+    same path walk serves both the full wrap and the partial one.
 
-    Building them as tubes rather than as quads + Solidify matters: Solidify on
-    an open per-hole ring extends along the surface normal, which points
-    outward on this geometry and shoves the mesh ~1.5 cm past the skin,
-    corrupting the bounding box.
-
-    A staggered lattice (odd rows offset by half a pitch) matches the real
-    part's appearance, and the band wraps the front and both side corners.
-
-    A solid skirt panel must NOT be wrapped around the band, and the tubes must
-    start ON the skin rather than inboard of it: a continuous face in front of
-    the holes hides every one of them, and tubes buried inside the shell are
-    invisible. The band then reads as smooth metal in both failure modes.
+    Tubes start on the groove floor and run OUTWARD to the original skin: a
+    tube that stops short leaves a lip of skin in front of every hole, and one
+    that overshoots pokes past the shell and inflates the bounding box.
     """
-    z_top = GRILLE_Z0
-    # Tube geometry: ring centres sit on the GROOVE FLOOR (inset by the recess
-    # depth) and the barrel runs OUTWARD to the original skin, so the mouths
-    # are flush with the surrounding surface and the bores are genuinely open.
-    # A tube that stops short leaves a lip of skin in front of every hole; one
-    # that overshoots pokes past the shell and inflates the bounding box.
-    depth = GRILLE_RECESS
-    # Rows must fit between the foot line (FOOT_H) and the band top, and the
-    # tube depth must not push a hole below FOOT_H — anything under the feet
-    # inflates Z.
-    z_bot = FOOT_H + depth + 0.04
-    rows = max(1, int((z_top - 0.16 - z_bot) / (pitch * 0.86)))
-    row_dz = (z_top - 0.16 - z_bot) / max(1, rows - 1) if rows > 1 else 0.0
-    z_mid = z_top - 0.16
-    # Hole tubes start at the groove floor and reach OUTWARD to the skin, so
-    # their mouths sit flush with the recessed band and the bores are genuinely
-    # open. `inset` is the recess depth: an inset ring at the skin leaves an
-    # unbroken wall in front of every hole, which is invisible in a render.
-    inset = GRILLE_RECESS
-    hx, hy = W / 2.0 - inset, D / 2.0 - inset
-    r = R_VERT - inset
-
     ring = [
         (math.cos(2 * math.pi * k / seg), math.sin(2 * math.pi * k / seg))
         for k in range(seg)
     ]
 
-    # dense sample of the rounded-rect path, plus cumulative arc length.
-    #
-    # Reuse the body's own rounded_rect so the cutter matches the shell
-    # exactly. Two failure modes this replaces:
-    #
-    # * Corner ARC CENTRES are inset by r. A corner of a rounded rect at
-    #   half-extent hx with radius r is centred at (hx - r, 0), not (hx, 0);
-    #   using the edge midpoint pushes the path r outward and inflates the
-    #   bounding box by exactly r.
-    # * Corners must be walked as real ARCS. Interpolating straight lines
-    #   between the four corner start/end points cuts the corner off, the path
-    #   no longer matches the shell it is meant to cut, and EXACT reports a
-    #   degenerate result — a few hundred stray verts and a bbox that grows
-    #   asymmetrically, because the shortcut lands differently on each axis.
-    perim, acc = [], [0.0]
-    # rounded_rect already returns a CCW ring with subdivided edges and true
-    # corner arcs, in order — exactly the path we need, no resampling.
+    # The path is the profile at the GROOVE FLOOR, taken from the body's own
+    # rounded_rect so the two can never drift. Corner arc centres there are
+    # inset by the radius (a corner at half-extent hx with radius r is centred
+    # at (hx - r, 0), not (hx, 0)); using the edge midpoint pushes the path
+    # outward by r and inflates the bbox by exactly that much.
+    hx, hy = W / 2.0 - depth, D / 2.0 - depth
+    r = R_VERT - depth
     perim = rounded_rect(hx, hy, r, seg=24, edge_sub=96)
+    acc = [0.0]
     for i in range(1, len(perim)):
         ax, ay = perim[i - 1]
         bx, by = perim[i]
@@ -411,19 +445,22 @@ def build_grille_band(mats, body, pitch=GRILLE_PITCH, hole_r=GRILLE_HOLE_R, seg=
         ln = math.hypot(dx, dy) or 1.0
         return px, py, dx / ln, dy / ln
 
+    rows = max(1, min(rows_cap, int((z_hi - z_lo) / (pitch * 0.86))))
+    row_dz = (z_hi - z_lo) / max(1, rows - 1) if rows > 1 else 0.0
+
     verts, faces = [], []
     placed = 0
     for row in range(rows):
-        z0 = z_mid - row * row_dz
+        z0 = z_lo + (z_hi - z_lo) / 2.0 - row * row_dz
         s = (pitch / 2.0) if row % 2 else 0.0
         while s < total:
             px, py, tx, ty = point_at(s)
+            ff = front_factor(py)
+            if ff < 0.15:
+                s += pitch
+                continue          # outside this field's arc
             rx, ry = -ty, tx                 # outward normal
             base = len(verts)
-            # front ring (flush with the skin) and back ring (on the groove
-            # floor). depth is measured OUTWARD here: the groove was cut
-            # inboard by GRILLE_RECESS and the tube has to span it back out to
-            # the original skin, or it stays buried and the holes vanish.
             for oz in (0.0, depth):
                 for ox, oy in ring:
                     verts.append((px + rx * (ox * hole_r) + tx * (oy * hole_r),
@@ -431,12 +468,10 @@ def build_grille_band(mats, body, pitch=GRILLE_PITCH, hole_r=GRILLE_HOLE_R, seg=
                                   z0 + oz))
             for k in range(seg):
                 k2 = (k + 1) % seg
-                # outer wall
-                faces.append((base + k, base + k2, base + seg + k2, base + seg + k))
-                # inner wall, reversed so the tube is a closed solid
+                faces.append((base + k, base + k2,
+                              base + seg + k2, base + seg + k))
                 faces.append((base + 2 * seg + k2, base + 2 * seg + k,
                               base + 3 * seg + k, base + 3 * seg + k2))
-            # end caps
             for k in range(seg):
                 k2 = (k + 1) % seg
                 faces.append((base + k2, base + k,
@@ -446,16 +481,65 @@ def build_grille_band(mats, body, pitch=GRILLE_PITCH, hole_r=GRILLE_HOLE_R, seg=
             placed += 1
             s += pitch
 
-    obj = simple_mesh("BottomGrille", verts, faces, mats["grille"], smooth=True)
-
-    # No boolean here. The groove is part of the body loft (see grille_inset),
-    # so the hole tubes just sit in it: their mouths are flush with the skin
-    # and their barrels reach down to the groove floor. Booleans on this shape
-    # failed three ways in a row — tangent cutter, buried cutter, proud cutter
-    # — and two of those are silent.
-    print("grille: %d holes in %d rows, band z %.2f..%.2f cm"
-          % (placed, rows, FOOT_H, z_top))
+    obj = simple_mesh(name, verts, faces, mats["grille"], smooth=True)
+    print("  %s: %d holes in %d rows" % (name, placed, rows))
     return obj
+
+
+def field_factor(gap_cm):
+    """Perimeter mask: 1.0 on the rear and sides, 0.0 within `gap_cm` of the front.
+
+    The front face is where py is most negative, so the mask is a smoothstep on
+    how far around from that face a point sits.
+    """
+    gt = gap_cm / (2.0 * (D / 2.0))
+
+    def f(py):
+        t = (py + D / 2.0) / D            # 0 at the front, 1 at the rear
+        if t >= 1.0 - gt:
+            return 1.0
+        if t <= gt:
+            return 0.0
+        u = (t - gt) / (1.0 - 2.0 * gt)
+        return u * u * (3.0 - 2.0 * u)   # smoothstep
+    return f
+
+
+def build_grille_band(mats, body):
+    """Both ventilation fields: the base band and the upper rear/side field.
+
+    Neither is a boolean. Both recesses come from the body loft (see
+    `grille_inset`), and the hole tubes are laid into them from the groove
+    floor outward to the original skin. Booleans on this shape failed three
+    ways in a row — tangent cutter, buried cutter, proud cutter — and two of
+    those are silent.
+
+    The fields differ only in span, depth and how far around the perimeter
+    they reach, which is what `build_grille_field` takes as arguments:
+
+    * base band   — z 0.42..1.62, the whole perimeter, 0.14 cm deep
+    * upper field — z 50%..93% of height, rear and sides only, leaving the
+      front panel solid silver above the band
+    * lower field — z 18%..34% of height, rear and sides only, below the ports
+    """
+    band = build_grille_field(
+        mats, "BottomGrille",
+        GRILLE_BAND_Z0 + 0.10, GRILLE_BAND_Z1 - 0.10,
+        GRILLE_RECESS, GRILLE_PITCH, GRILLE_HOLE_R,
+        front_factor=lambda py: 1.0, seg=8, rows_cap=8)
+
+    upper = build_grille_field(
+        mats, "UpperGrille",
+        UPPER_Z0 + 0.12, UPPER_Z1 - 0.12,
+        UPPER_DEPTH, UPPER_PITCH, UPPER_HOLE_R,
+        front_factor=field_factor(UPPER_FRONT_GAP), seg=8, rows_cap=40)
+
+    lower = build_grille_field(
+        mats, "LowerRearGrille",
+        LOWER_F_Z0 + 0.10, LOWER_F_Z1 - 0.10,
+        LOWER_F_DEPTH, UPPER_PITCH, UPPER_HOLE_R,
+        front_factor=field_factor(LOWER_F_GAP), seg=8, rows_cap=8)
+    return band, upper, lower
 
 
 def rounded_rect_path(hx, hy, r, steps=720):
@@ -559,8 +643,16 @@ def add_round_socket(name, x, z, r, y_mouth, mats, depth=0.30, inward=1.0):
 def build_rear_io(mats):
     """Rear bay is a real recess (boolean); the connectors sit inside it."""
     y_face = D / 2.0
-    bay_x, bay_z0, bay_z1 = 8.70, 2.20, 6.30
-    bay_depth = 0.85
+    # Port bay geometry, from Apple's rear diagram read against a 10% grid:
+    # the solid band runs 50%..80% down from the top, so its height is 30% of
+    # the chassis. The earlier bay was 4.1 cm tall on a 9.5 cm body — 43% — and
+    # 17.4 cm wide, i.e. it covered almost the whole rear panel and swallowed
+    # both perforated fields. Its top edge also sat ABOVE UPPER_Z0, so the
+    # boolean removed the upper field outright.
+    bay_x = 7.60
+    bay_z0 = Z_TOTAL * 0.20
+    bay_z1 = Z_TOTAL * 0.50
+    bay_depth = 0.42
     zc = (bay_z0 + bay_z1) / 2.0
     body = bpy.data.objects["Body"]
 
@@ -572,30 +664,43 @@ def build_rear_io(mats):
                   bay_x * 2.0, bay_depth + 0.20, bay_z1 - bay_z0,
                   bevel=0.35, mats=mats)
 
-    # Rear port order follows Apple's "Take a Tour of Mac Studio" guide, which
-    # lists the back view left-to-right as: Thunderbolt 5 x4, 10 Gigabit
-    # Ethernet, power port, USB-A x2, HDMI, 3.5 mm audio jack.
+    # Rear port order, from Apple's own rear hardware diagram
+    # (/v/mac-studio/o/images/overview/connectivity/hw_back__*.jpg), read
+    # left-to-right as shown in that image:
     #
-    # That guide's "back view" is the machine seen from behind, which is the -Y
-    # direction in this model — so the guide's left-to-right is the NEGATIVE of
-    # our +X. Mirror the x coordinates or the row comes out reversed.
-    y_mouth = y_face - 0.45
+    #   4x USB-C (USB 3.2 Gen 2, 10 Gb/s) | 10GbE | AC power inlet
+    #   | 2x Thunderbolt 5 | HDMI | 3.5 mm headphone | power button
+    #
+    # The earlier build had four THUNDERBOLT ports grouped on the left and no
+    # power button at all. Apple's diagram shows only TWO Thunderbolt 5 ports,
+    # and the four leftmost are plain 10 Gb/s USB-C.
+    #
+    # That diagram is a straight-on REAR view, which in this model is the +Y
+    # side, so its left-to-right is the NEGATIVE of our +X. Mirror the x values.
+    y_mouth = y_face - 0.24
+    # x positions are MODEL space, mirrored from the diagram's visual order.
+    # The bay is 15.2 cm wide, so keep everything within +/- 7.0.
     parts = [
-        # (name, x, width, height) in MODEL space. Apple's guide order is
-        # mirrored into this axis (see note above).
-        ("TB5_1", 7.55, 0.92, 0.30),
-        ("TB5_2", 6.05, 0.92, 0.30),
-        ("TB5_3", 4.55, 0.92, 0.30),
-        ("TB5_4", 3.05, 0.92, 0.30),
-        ("RJ45", 0.95, 1.45, 1.32),
-        ("PowerInlet", -1.05, 1.05, 0.60),
-        ("USBA_1", -3.05, 1.40, 0.56),
-        ("USBA_2", -4.60, 1.40, 0.56),
-        ("HDMI", -6.30, 1.50, 0.44),
+        # (name, x, width, height) — USB-C and TB5 share the USB-C shell
+        ("USBC_1", 6.55, 0.92, 0.30),
+        ("USBC_2", 5.35, 0.92, 0.30),
+        ("USBC_3", 4.15, 0.92, 0.30),
+        ("USBC_4", 2.95, 0.92, 0.30),
+        ("RJ45", 1.15, 1.45, 1.28),
+        ("PowerInlet", -1.15, 1.05, 0.60),
+        ("TB5_1", -3.00, 0.92, 0.30),
+        ("TB5_2", -4.20, 0.92, 0.30),
+        ("HDMI", -5.85, 1.50, 0.44),
     ]
     for name, x, w, h in parts:
         add_socket("Port_" + name, x, zc, w, h, y_mouth, mats, inward=-1.0)
-    add_round_socket("Port_Headphone", -8.05, zc, 0.29, y_mouth, mats, inward=-1.0)
+    add_round_socket("Port_Headphone", -6.95, zc, 0.26, y_mouth, mats, inward=-1.0)
+
+    # Touch ID power button, at the far right of the bay in Apple's diagram.
+    # It is a separate control from the AC inlet and is easy to miss.
+    pw = add_cylinder("Port_PowerButton", 6.55, y_mouth - 0.06, zc + 1.05,
+                      0.22, 0.10, mats["alu"], verts=32, axis="Y")
+    return pw
 
 
 def build_front_io(mats, body):
