@@ -19,14 +19,15 @@ argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 OUT = argv[0] if argv else DEFAULT_OUT
 
 # Studio furniture must not ship: the viewer supplies its own environment.
+# The five lights (Key/Top/Rim/Fill/RearBayFill) go too — three.js builds its
+# own lighting, and an export_lights=True GLB would only add payload.
 STUDIO = {"Floor", "BounceL", "BounceR"}
 
 bpy.ops.wm.open_mainfile(filepath=BLEND)
 scene = bpy.context.scene
 
-# keep only the product
 for obj in list(scene.objects):
-    if obj.name in STUDIO or obj.type == "LIGHT" and obj.name == "LEDglow":
+    if obj.name in STUDIO:
         bpy.data.objects.remove(obj, do_unlink=True)
 
 # cameras/lights the renderer added are not needed by the viewer either
@@ -35,6 +36,21 @@ for obj in list(scene.objects):
         bpy.data.objects.remove(obj, do_unlink=True)
 
 bpy.ops.object.select_all(action="SELECT")
+
+# glTF names its meshes from the MESH DATA BLOCK, not the object, and every
+# mesh here is named Cube.001 / Cylinder.004 after the primitives are created.
+# That breaks the viewer's part categorisation, which keys on
+# /Grille/, /^Port_|^Front_/, /^Foot_|^Power/ — all 100-odd parts would land in
+# the fallback bucket and the per-part toggles would do nothing. Copy the object
+# name onto the data before export so the names survive.
+renamed = 0
+for obj in scene.objects:
+    if obj.type != "MESH":
+        continue
+    if obj.data.name != obj.name:
+        obj.data.name = obj.name
+        renamed += 1
+print("named %d mesh data-blocks after their objects" % renamed)
 
 # normalise: the build works in centimetres, three.js wants metres
 for obj in scene.objects:

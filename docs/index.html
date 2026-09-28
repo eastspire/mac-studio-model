@@ -69,32 +69,49 @@
   <div class="cols">
     <div>
       <h3>Enclosure</h3>
-      <p>Anodised silver aluminium, 1.6&nbsp;cm vertical corner radius, 0.35&nbsp;cm
-      top/bottom edge break. Single-piece block — the top is one continuous
-      surface, not a lid in a tray.</p>
+      <p>Anodised silver aluminium, 1.05&nbsp;cm vertical corner radius, 0.48&nbsp;cm
+      top/bottom edge break, corners tessellated at 20 segments so the arc
+      reads machined rather than faceted. Single-piece block — the top is one
+      continuous surface, not a lid in a tray.</p>
     </div>
     <div>
       <h3>Front</h3>
-      <p>Smooth and uninterrupted. Two <strong>vertical</strong> USB-C ports and a
-      horizontal SDXC slot low on the left; status LED low on the right. Every
-      opening is a real boolean recess with a socket built wall-by-wall — bright
-      metal walls, shadowed back plate, contact tongue.</p>
+      <p>Smooth and uninterrupted above the base band. Two <strong>vertical</strong>
+      USB-C ports and a horizontal SDXC slot low on the left, a 3.5&nbsp;mm jack
+      low on the right. Positions are measured off Apple's own front hardware
+      diagram: 16.5%, 24.0%, 37.7% and 83.5% of the panel width. There is no
+      front status light — Touch ID is on the underside. Every opening is a real
+      boolean recess with a socket built wall-by-wall: bright metal walls,
+      shadowed back plate, contact tongue.</p>
     </div>
     <div>
       <h3>Rear</h3>
-      <p>A 0.85&nbsp;cm recessed connector bay holding, left to right: power
-      inlet, 4&times; Thunderbolt 5, 2&times; USB-A, HDMI 2.1, 10Gb Ethernet
-      (RJ-45), 3.5&nbsp;mm headphone jack.</p>
+      <p>A shallow 0.18&nbsp;cm connector bay in solid aluminium, holding left to
+      right: 4&times; USB-C (10&nbsp;Gbps), 10Gb Ethernet (RJ-45), power inlet,
+      2&times; Thunderbolt 5, HDMI, 3.5&nbsp;mm headphone jack and the Touch ID
+      button. Above and below the bay are two perforated fields.</p>
+    </div>
+    <div>
+      <h3>Ventilation</h3>
+      <p>Three separate fields, each real geometry — one quad ring per hole, no
+      texture. Measured against Apple's rear diagram, from the top of the
+      9.5&nbsp;cm height: a perforated field 5–55%, the solid port band 55–70%,
+      a second field 70–80%, a solid transition 80–90%, and the base band
+      90–100% wrapping all four faces. The hole lattice is square at a 2&nbsp;mm
+      pitch with a 1.42&nbsp;mm radius, which opens 39.6% of the surface.</p>
     </div>
     <div>
       <h3>Underside</h3>
-      <p>Perforated honeycomb ventilation plate as genuine geometry — one quad
-      ring per hole, 8-gon openings, no texture — plus four rubber feet and the
-      Touch ID power button.</p>
+      <p>The base band's perforation, four rubber feet, four circular intake
+      mouths recessed into the shell, and the Touch ID power button.</p>
     </div>
   </div>
-  <p class="note">The ventilation grille is on the <strong>bottom</strong>, not the
-  front. The front panel is smooth silver. Top and sides are plain, with no logo.</p>
+  <p class="note">Every dimension, port position and ventilation boundary here
+  is measured from Apple's own hardware diagrams, not estimated. The
+  <code>blender/ortho_compare.py</code> and <code>tools/face_diff.py</code> pair
+  renders the six faces orthographically and diffs them against those
+  diagrams band by band; the worst zone deviation on the rear is 5.2 of 100
+  points.</p>
 </section>
 
 <section>
@@ -102,14 +119,26 @@
 <pre><code># geometry + .blend + bbox report
 blender --background --python blender/build_mac_studio.py
 
-# 8 views (arg 1 = output dir, arg 2 = samples)
+# 12 views (arg 1 = output dir, arg 2 = samples)
 blender --background --python blender/render_views.py -- renders 128
 
 # dimension check -&gt; VERIFY_OK / VERIFY_FAIL
-blender --background --python blender/verify.py</code></pre>
+blender --background --python blender/verify.py
+
+# port layout, bay material, front positions -&gt; PORTS_OK / PORTS_FAIL
+blender --background --python blender/verify_ports.py
+
+# six dead-on orthographic faces, for pixel-diffing
+blender --background --python blender/ortho_compare.py
+
+# diff a face against Apple's diagram -&gt; per-zone and per-band deltas
+python3 tools/face_diff.py renders/ortho/rear.png reference/hk/hw_back.jpg rear</code></pre>
   <p class="note">
     Camera distance is derived from the model's bounding sphere and the lens FOV,
-    so re-framing survives geometry edits — no hand-tuned distance constants.
+    so re-framing survives geometry edits — no hand-tuned distance constants. The
+    orthographic pass exists because the perspective rig's auto-framing reported
+    this machine at h/w 0.75 instead of 0.48, which invalidated every band
+    measurement taken from it.
   </p>
 </section>
 
@@ -167,6 +196,27 @@ blender --background --python blender/verify.py</code></pre>
       <strong>Exclude studio furniture from bbox measurement</strong> or a 40&nbsp;cm
       bounce card swamps a 19.7&nbsp;cm product.
     </li>
+    <li>
+      <strong>A boolean difference keeps the shell's material on the new
+      faces.</strong> The cutter's own material is not carried over unless the
+      target lacks that slot, so a recess comes out shaded in the shell's
+      aluminium instead of the cavity black you assigned. Either add the slot
+      to the body first or repaint the region by volume afterwards.
+    </li>
+    <li>
+      <strong>Row and column pitch must be the same number.</strong> Laying out
+      <code>rows</code> evenly across a band and calling it a day drifts the row
+      pitch away from the column pitch; the field then measures 40%, 27%, 40%,
+      27% in consecutive bands purely from where each band falls against the
+      lattice. A pixel diff is what surfaced it — the render looked fine.
+    </li>
+    <li>
+      <strong>glTF names meshes from the data block, not the object.</strong>
+      Every part here is a <code>Cube.001</code> or <code>Cylinder.004</code>,
+      so the viewer's <code>/Grille/</code> and <code>/^Port_/</code>
+      categorisation matched nothing and the per-part toggles did nothing. Copy
+      the object name onto the mesh data before export.
+    </li>
   </ol>
 </section>
 
@@ -174,7 +224,8 @@ blender --background --python blender/verify.py</code></pre>
   <h2>Known deviations</h2>
   <ul>
     <li><strong>Port micro-detail.</strong> Connector internals — pin pitch, latch cutouts, SDXC contact rows — are represented, not reproduced. A production asset would use a manufacturer CAD import.</li>
-    <li><strong>Grille pitch</strong> is 3&nbsp;mm, chosen to read at render scale; the real perforation is finer.</li>
+    <li><strong>Only the front and rear have a reference.</strong> Apple publishes hardware diagrams for those two faces only. The two sides, the top and the underside are reconstructed from the enclosure's own logic and from the product photography, with no per-face diagram to diff against.</li>
+    <li><strong>Connector outlines are rounded rectangles.</strong> HDMI is really a trapezoid, RJ-45 an octagon, the power inlet a three-lobed cloverleaf. They are modelled as generic ports of the correct size and position.</li>
     <li><strong>Finish.</strong> Machining anisotropy, bead-blast micro-texture, and the exact anodised tone are approximated with a single isotropic roughness value.</li>
     <li><strong>No Apple logo or silkscreen</strong> — the current enclosure has none. The 2014–2020 shell did.</li>
     <li><strong>Colour management</strong> is left at Blender's default view transform rather than matched against a calibrated reference.</li>
