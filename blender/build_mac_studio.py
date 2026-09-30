@@ -1674,17 +1674,30 @@ def build_studio(scene):
 
 
 # --------------------------------------------------------------------- cameras
+# Azimuth is measured in the world XY plane: 0 puts the camera on +X, 90 on
+# +Y, 180 on -X, 270 on -Y. The convention is +Y = FRONT and -Y = REAR, so the
+# view NAMES below needed the angles to match it and did not - `03_rear` was
+# asked for at 180 degrees, which is the LEFT side, and every frame was a
+# rotation away from the one it claimed to be. Measured, from the camera
+# positions this table produces:
+#
+#     az=0    -> +X, the right side
+#     az=90   -> +Y, the front
+#     az=180  -> -X, the left side
+#     az=270  -> -Y, the rear
+#
+# So the front is 90, the rear is 270, and a side view is 0 or 180.
 VIEWS = [
-    ("01_front", "front", 0.0, 2.0, 46.0),
-    ("02_side", "side", 90.0, 2.0, 46.0),
-    ("03_rear", "rear", 180.0, 2.0, 46.0),
-    ("04_hero", "3q", 215.0, 16.0, 44.0),
+    ("01_front", "front", 90.0, 2.0, 46.0),
+    ("02_side", "side", 0.0, 2.0, 46.0),
+    ("03_rear", "rear", 270.0, 2.0, 46.0),
+    ("04_hero", "3q", 235.0, 16.0, 44.0),
     ("05_top", "top", 200.0, 88.0, 44.0),
     ("06_bottom", "bottom", 20.0, -88.0, 44.0),
-    ("07_front_closeup", "front", 0.0, 4.0, 17.0),
-    ("08_rear_closeup", "rear", 180.0, 4.0, 17.0),
-    ("09_grille_macro", "rear", 180.0, 10.0, 9.0),
-    ("10_cutaway", "cutaway", 208.0, 14.0, 42.0),
+    ("07_front_closeup", "front", 90.0, 4.0, 17.0),
+    ("08_rear_closeup", "rear", 270.0, 4.0, 17.0),
+    ("09_grille_macro", "rear", 270.0, 10.0, 9.0),
+    ("10_cutaway", "cutaway", 235.0, 14.0, 42.0),
 ]
 
 TARGETS = {
@@ -1704,6 +1717,13 @@ def place_camera(name, az, el, dist, target):
     cam_data.lens = 85.0 if dist < 20.0 else 62.0
     cam = bpy.data.objects.new(name, cam_data)
     bpy.context.collection.objects.link(cam)
+    # bpy.context.collection is not always the scene's collection - under
+    # --background it can be a default that does not exist, and the link above
+    # then does nothing at all: no camera in the scene, scene.camera stays
+    # None, and the render is an empty frame with no error to explain it.
+    # Link to the scene explicitly and fall back only if that is missing too.
+    if name not in bpy.context.scene.objects:
+        bpy.context.scene.collection.objects.link(cam)
     cam.location = Vector((
         dist * math.cos(el_r) * math.cos(az_r) + target[0],
         dist * math.cos(el_r) * math.sin(az_r) + target[1],
@@ -1784,7 +1804,10 @@ def main():
     scene.render.image_settings.file_format = "PNG"
 
     for name, kind, az, el, dist in VIEWS:
-        target = TARGETS.get(kind, (0.0, 0.0, H_TOTAL / 2.0))
+        # TARGETS is keyed by VIEW NAME. Looking it up by `kind` instead meant
+        # every closeup fell back to the body centre and framed the whole
+        # machine from 17 cm.
+        target = TARGETS.get(name, TARGETS.get(kind, (0.0, 0.0, H_TOTAL / 2.0)))
         if kind == "cutaway":
             # Hide the near half of the shell so the internals read.
             body.hide_render = True
