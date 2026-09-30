@@ -7,7 +7,7 @@ import os
 import bpy
 from mathutils import Vector
 
-BLEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "mac_studio.blend"))
+BLEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "mac_studio.blend"))
 
 bpy.ops.wm.open_mainfile(filepath=BLEND)
 deps = bpy.context.evaluated_depsgraph_get()

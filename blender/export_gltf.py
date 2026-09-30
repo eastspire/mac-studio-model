@@ -12,7 +12,8 @@ import sys
 import bpy
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BLEND = os.path.abspath(os.path.join(HERE, "..", "mac_studio.blend"))
+# Same trap as render_views.py: the root .blend is a stale duplicate.
+BLEND = os.path.abspath(os.path.join(HERE, "mac_studio.blend"))
 DEFAULT_OUT = os.path.abspath(os.path.join(HERE, "..", "docs", "mac-studio.glb"))
 
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
@@ -61,6 +62,15 @@ for obj in scene.objects:
 bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
+# Draco. Without it the export is 42 MB: the geometry is 1.2 M triangles, and
+# the perforation tubes are tens of thousands of tiny disconnected cylinders
+# that do not compress at all in plain glTF. The viewer ships a Draco decoder
+# (docs/draco/), so the compression is what makes the page loadable - an
+# earlier run of this script without it silently published a 42 MB asset and
+# the README's "0.40 MB" claim was left describing a file nobody had.
+#
+# quantization=14 is Draco's default here and is visually lossless at this
+# scale: 2^-14 of the model's 197 mm extent is 12 microns.
 bpy.ops.export_scene.gltf(
     filepath=OUT,
     export_format="GLB",
@@ -73,6 +83,8 @@ bpy.ops.export_scene.gltf(
     export_cameras=False,
     export_lights=False,
     export_extras=True,
+    export_draco_mesh_compression_enable=True,
+    export_draco_mesh_compression_level=6,
 )
 
 size = os.path.getsize(OUT)

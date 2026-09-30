@@ -9,6 +9,13 @@ import mathutils
 from mathutils import Vector
 
 M = mathutils.Vector
+
+# The canonical .blend, written by build_mac_studio.py next to it. There was a
+# second, stale copy at the repo root (97 objects, no RearField) and this
+# resolved to it, so the verifier measured a different machine from the
+# one every other tool read.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+BLEND = os.path.join(_HERE, "mac_studio.blend")
 BBOX_TOL = 1e-4
 
 
@@ -58,7 +65,7 @@ def check(name, ok, detail=""):
 
 
 def main():
-    bpy.ops.wm.open_mainfile(filepath="mac_studio.blend")
+    bpy.ops.wm.open_mainfile(filepath=BLEND)
     fails = 0
     ports = group_ports()
     rear = {k: v for k, v in ports.items() if not k.startswith("Front_")}

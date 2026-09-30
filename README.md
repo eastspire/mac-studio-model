@@ -119,16 +119,18 @@ docs/                   GitHub Pages site (published from /docs)
   viewer.css
   style.css
   mac-studio.glb        0.40 MB Draco GLB, 84 meshes / 51,840 tris, real scale
-  images/               8 renders, web-optimised (1600px progressive JPEG)
-  thumbs/               720px gallery thumbnails
-mac_studio.blend        generated; not committed (see .gitignore)
+  images/               12 renders, web-optimised (1400px progressive JPEG)
+  thumbs/               420px gallery thumbnails
+blender/mac_studio.blend  generated; not committed (see .gitignore)
 renders/                12 MB of full-resolution PNG; not committed
 reference/              Apple photos used for the fidelity check; not committed
 ```
 
-The repo is ~1.2 MB. The 12 MB of full-resolution Cycles PNGs, the 3.4 MB
+The repo is ~1.2 MB. The 12 MB of full-resolution Cycles PNGs, the 45 MB
 `.blend`, and the Apple reference photos are all gitignored — regenerate them
-with the commands below.
+with the commands below. There is exactly one `.blend`, and it lives next to
+the build script that writes it; `tools/check_blend.py` fails if a second one
+appears at the repo root.
 
 ## Interactive viewer
 
@@ -254,15 +256,27 @@ than an error.
 
 ## Known deviations
 
-- **The `.blend` and the Cycles renders on disk are stale.** Blender cannot
-  start in the sandbox this model was authored in — it segfaults inside Metal's
-  GPU backend detection before any Python runs. `blender/build_mac_studio.py`
-  has therefore never been executed here, and `mac_studio.blend` is the
-  pre-rewrite artefact. The geometry is verified against the **source** by
-  `tools/verify_spec.py` (measured against Apple's photographs) and by the
-  offline renderer in `tools/compare_render.py`, not by a Blender render. To
-  regenerate on an unsandboxed machine:
-  `SKIP_RENDER=1 /Applications/Blender.app/Contents/MacOS/Blender --background --python blender/build_mac_studio.py`
+- ~~**The `.blend` and the Cycles renders on disk are stale.**~~ **Retracted.**
+  This said Blender could not start in the authoring sandbox, so the build
+  had never run and everything on disk was a pre-rewrite artefact. That was
+  wrong: Blender 4.5.4 runs fine here. The real reason the model looked wrong
+  was three sign errors in the build (see below), plus **two** `.blend` files —
+  the build writes `blender/mac_studio.blend` while five tools resolved their
+  path to a stale 97-object copy at the repo root, so the renders and the
+  published GLB were built from the broken machine while the gates measured the
+  correct one. `tools/check_blend.py` now fails on a second `.blend`.
+  To rebuild everything:
+  ```bash
+  SKIP_RENDER=1 /Applications/Blender.app/Contents/MacOS/Blender --background \
+    --factory-startup --python blender/build_mac_studio.py
+  /Applications/Blender.app/Contents/MacOS/Blender --background \
+    --factory-startup --python blender/render_views.py -- renders 64
+  python3 tools/publish_assets.py
+  /Applications/Blender.app/Contents/MacOS/Blender --background \
+    --factory-startup --python blender/export_gltf.py
+  ```
+  `tools/publish_assets.py --check` reports whether `docs/images` and
+  `docs/thumbs` are older than the renders they are made from.
 - **Port micro-detail.** Connector internals (pin pitch, latch cutouts,
   SDXC contact rows) are represented, not reproduced. A production asset would
   use a manufacturer CAD import.

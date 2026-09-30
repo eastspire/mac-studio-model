@@ -14,7 +14,13 @@ import sys
 import bpy
 from mathutils import Vector
 
-BLEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "mac_studio.blend"))
+# The canonical .blend lives next to the build script, which is where
+# build_mac_studio.py writes it. This used to point at the repo root,
+# where a second, older .blend sat: 97 objects, no RearField, no
+# perforated field at all - the pre-fix machine. Every render and the
+# published GLB were therefore built from the broken model while the
+# gates read the correct one, and the two never disagreed out loud.
+BLEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "mac_studio.blend"))
 OUT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", sys.argv[sys.argv.index("--") + 1])
     if "--" in sys.argv
@@ -34,18 +40,40 @@ EXCLUDE = {"Floor", "BounceL", "BounceR"}
 # enough to hide the three-zone structure (upper perforation / port band /
 # lower perforation) that a side-by-side comparison is checking for. Keep the
 # elevation views explicit rather than folding a tilt into the three-quarter.
+# azimuth, elevation, lens, z-focus, hide-floor, [zoom]
+#
+# Sign convention: +Y is the FRONT (2x USB-C, SDXC, status LED) and -Y is the
+# REAR (the I/O row, the exhaust field, the power button), so
+#   az  90 -> camera on +Y, looking at the FRONT
+#   az 270 -> camera on -Y, looking at the REAR
+#
+# "01_front" and "03_rear" were swapped here exactly as they were in
+# ortho_measure.py, so every published image was labelled with the wrong face:
+# 01_front.png showed the rear elevation and vice versa. The three-quarter and
+# hero angles are unaffected in the sense that they show the whole machine, but
+# the flat and closeup views are face-specific and were all mirrored.
 VIEWS = [
-    ("01_front", 270.0, 4.0, 62.0, 0.5, False),
+    ("01_front", 90.0, 4.0, 62.0, 0.5, False),
     ("02_side", 180.0, 3.0, 62.0, 0.5, False),
-    ("03_rear", 90.0, 4.0, 62.0, 0.5, False),
-    ("04_hero", 215.0, 34.0, 58.0, 0.45, False),
-    ("05_top", 270.0, 78.0, 62.0, 0.5, False),
-    ("06_bottom", 270.0, -62.0, 62.0, 0.5, True),
-    ("07_front_closeup", 270.0, 2.0, 90.0, 0.28, False),
-    ("08_rear_closeup", 90.0, 4.0, 90.0, 0.45, False),
+    ("03_rear", 270.0, 4.0, 62.0, 0.5, False),
+    ("04_hero", 35.0, 34.0, 58.0, 0.45, False),
+    ("05_top", 90.0, 78.0, 62.0, 0.5, False),
+    # A genuine underside view needs a steep elevation. At el -62 the camera
+    # is still well above the horizon, so it shows the base band edge-on
+    # rather than the perforated bottom cover - and the bottom cover is the
+    # intake, so this shot is the only one that shows it.
+    ("06_bottom", 90.0, -78.0, 62.0, 0.5, True),
+    ("07_front_closeup", 90.0, 2.0, 90.0, 0.28, False),
+    ("08_rear_closeup", 270.0, 4.0, 90.0, 0.45, False),
     # Dead-level rear elevation, matching the framing of Apple's own hardware
     # diagram so the two can be compared region for region.
-    ("12_rear_flat", 90.0, 0.0, 70.0, 0.5, False),
+    ("12_rear_flat", 270.0, 0.0, 70.0, 0.5, False),
+    # Tight on the port row. The site gallery links to this as "Rear ports"
+    # (docs/index.html), but it was never in VIEWS - the PNG and the published
+    # JPEG were made by hand and no script could regenerate them, so the image
+    # silently outlived the model it depicted. tools/publish_assets.py now
+    # fails on any render not listed here, which is how this surfaced.
+    ("21_rear_ports", 270.0, 2.0, 100.0, 0.16, False, 0.20),
     # Low three-quarter view hugging the base band. This is the only angle that
     # shows the perforations: from straight below the holes are edge-on, and
     # from eye level the band is a 1.6 cm strip hidden behind the machine.

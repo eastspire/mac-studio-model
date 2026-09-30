@@ -39,6 +39,10 @@ scene.environment = envRT.texture;
 
 // ------------------------------------------------------------------ camera
 const camera = new THREE.PerspectiveCamera(38, 1, 0.01, 100);
+// The opening position is a placeholder; setViewImmediate() re-frames it from
+// the model's real bounding box as soon as the GLB is parsed. A hardcoded
+// value here is what left the first render cropped - the initial framing has
+// to come from the model, not from a number typed before the model existed.
 camera.position.set(0.34, -0.34, 0.24);
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -127,6 +131,10 @@ loader.load(
     const centre = box.getCenter(new THREE.Vector3());
     controls.target.set(centre.x, centre.y, centre.z);
     document.getElementById('dims').dataset.ready = '1';
+    // Frame the opening shot from the box we just measured, using the same
+    // fit every preset button uses. Without this the camera keeps whatever
+    // position it was constructed with, and that number predates the model.
+    setViewImmediate(...VIEWS[0].slice(1));
 
     root.traverse((o) => {
       if (!o.isMesh) return;
@@ -195,34 +203,74 @@ function buildWireframe(root) {
 }
 
 // ------------------------------------------------------------- camera views
-// azimuth (deg, 270 = -Y = front), elevation (deg)
+// azimuth (deg), elevation (deg), and a FRAMING FACTOR - not a distance.
+//
+// Convention, and this is the third file to get it backwards: the exported
+// GLB is +Y = FRONT (2x USB-C, SDXC, status LED) and -Y = REAR (the I/O row,
+// the exhaust field, the power button), so
+//   az  90 -> camera on +Y, looking at the FRONT
+//   az 270 -> camera on -Y, looking at the REAR
+// 正面 (front) and 背面 (rear) were swapped here exactly as they were in
+// blender/render_views.py and blender/ortho_measure.py, and the comment above
+// asserted the wrong convention, which is what made it look deliberate. The
+// symptom: the 背面 button flew to the smooth front panel, so the one view
+// that exists to show the ports and the perforated field showed a blank face.
+//
+// The third column used to be an absolute distance in metres (0.36, 0.42...)
+// and every view was CROPPED: at a 38 deg vertical fov, 0.36 m gives a
+// half-height of 0.124 m against the machine's 0.139 m half-diagonal, so the
+// camera sat inside the object's own silhouette. Those numbers were tuned for
+// an earlier 84-mesh export and were never re-derived. It is now a factor
+// applied to the distance that actually fits the loaded bounding box, so the
+// framing survives a change of model or of fov.
 const VIEWS = [
-  ['3/4 透视',  215, 28, 0.42],
-  ['正面',      270,  8, 0.36],
-  ['侧面',      180,  6, 0.36],
-  ['背面',       90,  8, 0.36],
-  ['顶视',      270, 78, 0.40],
-  ['底视',      270, -62, 0.40],
-  ['前脸特写',  270,  4, 0.20],
-  ['接口特写',   90, 14, 0.22],
+  ['3/4 透视',  215, 28, 1.00],
+  ['正面',       90,  8, 1.00],
+  ['侧面',      180,  6, 1.00],
+  ['背面',      270,  8, 1.00],
+  ['顶视',       90, 78, 1.00],
+  // -78, not -62: at -62 the camera is still well above the horizon, so this
+  // showed the base band edge-on instead of the perforated bottom cover.
+  ['底视',       90, -78, 1.00],
+  // the two close-ups deliberately sit inside the object, so their factors
+  // are well below 1 - they are meant to crop.
+  ['前脸特写',   90,  4, 0.62],
+  ['接口特写',  270, 14, 0.68],
 ];
+
+/**
+ * The distance at which a box of the given size exactly fills the frame.
+ * Derived from the model's own bounding box, so it tracks the export.
+ */
+function fitDistance(radius, factor) {
+  const vFov = THREE.MathUtils.degToRad(camera.fov);
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+  const limiting = Math.max(vFov, hFov);
+  return (radius / Math.sin(limiting / 2)) * factor;
+}
 
 const viewsEl = document.getElementById('views');
 let tween = null;
 
-VIEWS.forEach(([label, az, el, dist], i) => {
+VIEWS.forEach(([label, az, el, factor], i) => {
   const b = document.createElement('button');
   b.className = 'btn' + (i === 0 ? ' on' : '');
   b.textContent = label;
   b.onclick = () => {
     viewsEl.querySelectorAll('.btn').forEach(x => x.classList.remove('on'));
     b.classList.add('on');
-    flyTo(az, el, dist);
+    flyTo(az, el, factor);
   };
   viewsEl.appendChild(b);
 });
 
-function flyTo(azDeg, elDeg, dist) {
+/** The model's bounding-sphere radius, once it has loaded. */
+function modelRadius() {
+  return boxSize ? boxSize.length() / 2 : 0.2;
+}
+
+function flyTo(azDeg, elDeg, factor) {
+  const dist = fitDistance(modelRadius(), factor);
   const t = controls.target;
   const az = THREE.MathUtils.degToRad(azDeg);
   const el = THREE.MathUtils.degToRad(elDeg);
@@ -234,7 +282,8 @@ function flyTo(azDeg, elDeg, dist) {
   tween = { from: camera.position.clone(), to, t0: performance.now(), dur: 700 };
 }
 
-function setViewImmediate(azDeg, elDeg, dist) {
+function setViewImmediate(azDeg, elDeg, factor) {
+  const dist = fitDistance(modelRadius(), factor);
   const t = controls.target;
   const az = THREE.MathUtils.degToRad(azDeg);
   const el = THREE.MathUtils.degToRad(elDeg);

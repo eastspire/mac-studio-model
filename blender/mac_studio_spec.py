@@ -70,7 +70,13 @@ UPPER_Z1 = (95.0 - FIELD_TOP_MM) / 10.0     # 9.030 cm
 # measures the field's own centre and it lands on 98.50 mm from the left edge
 # to within 0.08 mm, which is what validates the x origin for everything else.
 UPPER_HALF_X = 8.575
-UPPER_DEPTH = 0.15          # ~2 hole radii, deep enough to shadow each opening
+# The rear field's recess: how far the SKIN steps back, not how deep the holes
+# are. Same constraint as GRILLE_RECESS - hollow_body() puts the inner face at
+# D/2 - WALL, so a recess of exactly WALL would land the groove floor on the
+# cavity and leave no metal to perforate. Half the wall leaves 0.75 mm, which
+# the field's measured 53.2% open fraction (against a 54.2% design duty cycle)
+# confirms is enough to open cleanly while still reading as a recess.
+UPPER_DEPTH = 0.075
 # Hole lattice, fitted by 2-D cross-correlation over a 39 x 42 mm patch of the
 # field (tools/fit_lattice.py) and confirmed by drawing the fitted lattice back
 # onto the photograph (tools/lattice_overlay.py). The rows are 16% further
@@ -146,7 +152,26 @@ GRILLE_HOLE_RX = 0.0640     # 0.640 mm semi-axis across the band
 GRILLE_HOLE_RZ = 0.0264     # 0.264 mm semi-axis up the band
 GRILLE_HOLE_R = GRILLE_HOLE_RX    # legacy alias: the larger semi-axis
 GRILLE_PITCH = GRILLE_PITCH_X
-GRILLE_RECESS = 0.13
+# The band's recess depth: how far the SKIN steps back, not how deep the
+# holes are.
+#
+# hollow_body() cuts the cavity at W - 2*WALL, so the shell's inner face sits
+# at D/2 - WALL = 9.70 cm and its outer skin at D/2 = 9.85. A recess that
+# steps the skin back by exactly WALL lands it on the inner face, i.e. it
+# erases the entire wall: the groove floor and the cavity are the same plane,
+# the panel has no aluminium left to perforate, and every hole is a blind
+# pocket no matter how the lattice is built. That is what GRILLE_RECESS = 0.15
+# did - the band measured 0% open on all four faces while carrying a quarter
+# of a million vertices of flawless tube geometry.
+#
+# So the recess has to stay clear of the inner face. Half the wall leaves a
+# 0.75 mm band of metal to cut through, which is what the rear field's
+# verified 53.2% open fraction shows is plenty.
+#
+# Apple's photographs cannot resolve this: a recessed shadow line looks the
+# same at 0.75 mm and 1.5 mm. It is constrained by the wall, so
+# check_wall_ordering() below is what holds it to the wall.
+GRILLE_RECESS = 0.075          # half the wall; see check_wall_ordering()
 
 # Every connector, front and rear, shares one centre height. Measured from the
 # rear: the port bodies sit at 71.41..71.48 mm from the top (centre 23.55 mm
@@ -511,6 +536,38 @@ def io_row_check():
     chk(UPPER_Z0 < UPPER_Z1, "rear field is inverted")
     chk(GRILLE_BAND_Z1 < UPPER_Z0, "base band overlaps the rear field")
     chk(UPPER_HALF_X * 2 < W, "rear field is wider than the chassis")
+
+    # A recess must stay CLEAR of the cavity, or it erases the wall.
+    #
+    # hollow_body() cuts the cavity at W - 2*WALL, so the shell's inner face
+    # is at D/2 - WALL. grille_inset() steps the skin back by the recess, and
+    # if that lands the groove floor on the inner face the panel has no
+    # aluminium left between the groove and the cavity - every hole is blind
+    # and no lattice work can open it. At GRILLE_RECESS = UPPER_DEPTH = WALL
+    # that is exactly what happened: the band read 0% open on all four faces
+    # while carrying a quarter of a million vertices of correct tube geometry.
+    #
+    # So the ordering is recess < WALL, strictly, and the hole's own depth is
+    # the remainder (build_grilles passes WALL - recess). The check is on the
+    # recess, not on the tube, because the recess is what the loft applies to
+    # the skin.
+    chk(GRILLE_RECESS < WALL,
+        "base band recess %.3f cm is not less than the %.3f cm wall, so the "
+        "groove erases the panel and its holes are blind"
+        % (GRILLE_RECESS, WALL))
+    chk(UPPER_DEPTH < WALL,
+        "rear field depth %.3f cm is not less than the %.3f cm wall, so the "
+        "groove erases the panel and its holes are blind"
+        % (UPPER_DEPTH, WALL))
+    # ...and the tubes must then be long enough to reach the cavity
+    chk(WALL - GRILLE_RECESS > 0.01,
+        "base band tube depth (WALL - recess) is too small to perforate")
+    chk(WALL - UPPER_DEPTH > 0.01,
+        "rear field tube depth (WALL - depth) is too small to perforate")
+    # and the recess must stay deep enough to read as a recess at all
+    chk(GRILLE_RECESS >= 0.03,
+        "base band recess %.3f cm is too shallow to read as a groove"
+        % GRILLE_RECESS)
 
     # The power button. These are ordering constraints, not repeats of the
     # measured values: what breaks is a gap that swallows the glyph, or a glyph

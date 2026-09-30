@@ -504,18 +504,57 @@ def add_tube(name, cx, cy, cz, r_out, r_in, h, mat, verts=40, axis="Z"):
     return obj
 
 
+# ---- open fraction ------------------------------------------------------
+# Measured by tools/ground_truth_open.py against the BUILT .blend, not
+# against the spec's analytic surface. That distinction is the whole point:
+# the surface the spec describes and the surface the loft produces are not
+# always the same object, and a check that derives its rays from the spec
+# agrees with the spec even when the panel is sealed.
+#
+# Current: 0 of 21,600 rays through the rear field reach the cavity. The
+# perforation tubes are built (3,069 in the field, 3,128 in the base band)
+# and carry the bore walls, but nothing subtracts them from the shell, so the
+# metal is unbroken. Three boolean approaches were built and measured:
+#
+#   * four-ring tube as cutter     2.8% open, shell intact
+#   * solid prism, WALL - recess   1.8% open, shell intact
+#   * solid prism, WALL + recess   100% open, Body reduced to 0 vertices
+#
+# The first is not a cutter: a tube's section is an annulus, so the
+# difference leaves the bore's core alone. The second leaves a ring of uncut
+# outer skin 0.85 mm proud of the bore. The third opens the panel but the
+# walk is on a rounded rectangle, so at the corners the prism juts sideways
+# into the side panels and the top and takes the chassis with it.
+#
+# The open version needs the prism to follow the LOCAL surface normal and the
+# LOCAL wall thickness, which means build_body has to hand its per-row wall
+# depth to build_grille_field instead of that function taking a constant.
+
 # ------------------------------------------------------- perforated fields
-def build_grille_field(mats, name, z_lo, z_hi, depth, pitch, hole_r,
+def build_grille_field(mats, name, z_lo, z_hi, recess, depth, pitch, hole_r,
                        mask_fn, seg=8, row_pitch=None, stagger=0.0,
                        max_holes=40000, hole_rz=None):
     """Punch a lattice of round hole tubes into a recessed field.
 
-    Tubes start on the groove floor and run OUTWARD to the original skin: a tube
-    that stops short leaves a lip of skin in front of every hole, and one that
-    overshoots pokes past the shell and inflates the bounding box.
+    `recess` and `depth` are separate and are not interchangeable:
+      * `recess` - how far grille_inset() stepped the SKIN back, i.e. where
+        the mouth of the hole sits. It places the walk.
+      * `depth`  - how much metal is LEFT under that skin, i.e. how long the
+        tube has to be to reach the cavity. It crosses the wall.
+
+    A tube that stops short leaves a lip of skin in front of every hole, and
+    one that overshoots pokes past the shell and inflates the bounding box.
+    Passing the recess as the depth is the subtle one: the two numbers are
+    both small, so it produces a correct-looking tube in the wrong place
+    rather than an error, and only a swept ray-cast notices.
 
     The path is the profile at the GROOVE FLOOR, taken from the body's own
     rounded_rect so the two cannot drift.
+
+    Holes are walked by ARC LENGTH and INTERPOLATED along each segment. The
+    walk has to interpolate, because rounded_rect leaves each flat face as a
+    handful of long segments: snapping to the nearest vertex instead put the
+    whole 0.186 cm pitch onto ~4 positions per row, 3.35 cm apart.
 
     Column pitch and row pitch are separate, and the stagger is a FRACTION of
     the column pitch rather than a half-pitch offset. The measured lattices are
@@ -537,17 +576,60 @@ def build_grille_field(mats, name, z_lo, z_hi, depth, pitch, hole_r,
                             seg=max(3, seg // 2), edge_sub=1)
     nring = len(ring)
 
-    hx, hy = W / 2.0 - depth, D / 2.0 - depth
-    perim = rounded_rect(hx, hy, R_VERT - depth, seg=24, edge_sub=160)
+    # The walk has to sit on the RECESSED skin, and the tube has to be as long
+    # as the metal LEFT under it. Those are two different numbers, so they are
+    # two parameters: `recess` places the mouth, `depth` crosses the metal.
+    # For a while one argument did both jobs, and because the two happen to be
+    # small and similar it built a plausible-looking tube in the wrong place
+    # rather than failing.
+    hx, hy = W / 2.0 - recess, D / 2.0 - recess
+    perim = rounded_rect(hx, hy, R_VERT - recess, seg=24, edge_sub=160)
     acc = [0.0]
     for i in range(1, len(perim)):
         ax, ay = perim[i - 1]
         bx, by = perim[i]
         acc.append(acc[-1] + math.hypot(bx - ax, by - ay))
+    # Close the walk, so the final stretch of the perimeter has a real length
+    # in acc. Without this the last segment is unaddressable and point_at()
+    # cannot interpolate through it.
+    acc.append(acc[-1] + math.hypot(perim[0][0] - perim[-1][0],
+                                    perim[0][1] - perim[-1][1]))
     total = acc[-1]
 
     def point_at(s):
-        lo, hi = 0, len(acc) - 1
+        """The point at arc length s along the closed walk, interpolated.
+
+        Interpolating is the whole fix. This used to return perim[lo] - the
+        nearest VERTEX - so every hole snapped to one of the walk's corners
+        instead of landing where the pitch said it should. rounded_rect
+        subdivides the corner arcs finely but leaves each flat face as a
+        handful of long segments, so the field's 0.186 cm pitch resolved to
+        only ~4 holes per row, 3.35 cm apart, and a 0.02 cm ground-truth
+        sweep measured 1.1% open against a 54.2% design.
+
+        That is also why the hole COUNT looked plausible (3,069) while the
+        face was sealed: the walk did emit them, the mask rejected the ones
+        that landed on the front and the sides, and what survived was a
+        sparse scatter of real holes on an otherwise solid panel. The count
+        was never evidence that the lattice was laid out - only the swept
+        open fraction is, which is why it is measured that way here.
+        """
+        if s <= 0.0:
+            px, py = perim[0]
+            nx_, ny_ = perim[1]
+            dx, dy = nx_ - px, ny_ - py
+            ln = math.hypot(dx, dy) or 1.0
+            return px, py, dx / ln, dy / ln
+        if s >= acc[-1]:
+            ax_, ay_ = perim[-1]
+            bx_, by_ = perim[0]
+            dx, dy = bx_ - ax_, by_ - ay_
+            ln = math.hypot(dx, dy) or 1.0
+            return ax_, ay_, dx / ln, dy / ln
+        # hi is bounded by the perim, not by acc: acc carries one extra entry
+        # for the closing segment, so len(acc) - 2 can be len(perim), and
+        # perim[lo + 1] then walks off the end.
+        lo, hi = 0, len(perim) - 1
         while lo < hi:
             mid = (lo + hi) // 2
             if acc[mid] < s:
@@ -555,10 +637,16 @@ def build_grille_field(mats, name, z_lo, z_hi, depth, pitch, hole_r,
             else:
                 hi = mid
         px, py = perim[lo]
-        nx_, ny_ = perim[(lo + 1) % len(perim)]
+        nxt = (lo + 1) % len(perim)
+        nx_, ny_ = perim[nxt]
         dx, dy = nx_ - px, ny_ - py
+        # The tangent stays the SEGMENT's direction. Recomputing it from the
+        # interpolated point to the next vertex would shorten it by (1 - f) and
+        # bend the normal, which tilts the hole mouths on the flat faces.
         ln = math.hypot(dx, dy) or 1.0
-        return px, py, dx / ln, dy / ln
+        seg = (acc[lo + 1] - acc[lo]) if lo + 1 < len(acc) else 0.0
+        f = 0.0 if seg <= 0.0 else min(1.0, max(0.0, (s - acc[lo]) / seg))
+        return px + dx * f, py + dy * f, dx / ln, dy / ln
 
     span = z_hi - z_lo
     rows = max(1, int(span / row_pitch) + 2)
@@ -578,22 +666,27 @@ def build_grille_field(mats, name, z_lo, z_hi, depth, pitch, hole_r,
                 break
             rx, ry = -ty, tx                       # outward normal
             base = len(verts)
-            # A hole is a tube along the NORMAL. Its cross-section lives in
-            # the (tangent, up) plane, and the four rings differ ONLY in how
-            # far they are pushed back along the normal:
+            # A hole is a four-ring TUBE along the NORMAL. Its cross-section
+            # lives in the (tangent, up) plane, and the four rings differ only
+            # in how far they are pushed along the normal:
             #
             #   ring 0,1  the mouth, ON the recessed floor
             #   ring 2,3  the same mouth, `depth` further in, closing the tube
             #
             # The ring's first coordinate is scaled by hole_r (across) and its
-            # second by rz (up the panel) — those are the hole's own axes, not
+            # second by rz (up the panel) - those are the hole's own axes, not
             # the tube's length. Getting that wrong is the bug that put every
-            # hole 0.71 mm proud: a first version applied the ring's first
-            # axis on the NORMAL and the second on the tangent, so each "hole"
-            # was a flat ring lying tangentially and extruded vertically.
-            # A second version then reused the ring's vertical offset as the
-            # tube's length, which extruded the tube `depth` TALL and filled
-            # the whole perforated field with black geometry.
+            # hole 0.71 mm proud: a first version applied the ring's first axis
+            # on the NORMAL and the second on the tangent, so each "hole" was a
+            # flat ring lying tangentially and extruded vertically. A second
+            # version then reused the ring's vertical offset as the tube's
+            # length, which extruded the tube `depth` TALL and filled the whole
+            # perforated field with black geometry.
+            #
+            # These tubes are VISIBLE geometry, not cutters. They model the
+            # bore's walls. Whether the panel is actually open is a separate
+            # question that no amount of hole-counting answers - see the
+            # KNOWN GAP in build_grilles().
             rz = hole_r if hole_rz is None else hole_rz
             for od in (-depth, 0.0, -depth, 0.0):
                 for ox, oy in ring:
@@ -626,20 +719,62 @@ def build_grille_field(mats, name, z_lo, z_hi, depth, pitch, hole_r,
 
 def build_grilles(mats):
     """The two ventilation features: the wrap-around base band and the single
-    large rear field."""
+    large rear field.
+
+    `recess` and `depth` are separate quantities and are not interchangeable:
+    `recess` is how far grille_inset() stepped the SKIN back (it places the hole
+    mouths), `depth` is how much metal is left under that skin. Conflating them
+    is subtle because both are small, and it produces a correct-looking tube in
+    the wrong place rather than an error.
+
+    KNOWN GAP: these holes are not yet open. The prism built here is a cutter,
+    but nothing subtracts it from the shell, so the panel is still sealed and a
+    ray down the middle of a hole hits Body at exactly the same distance as one
+    through the bridge beside it. Measure with tools/ground_truth_open.py, which
+    reads the built .blend rather than the spec: the spec's analytic surface and
+    the loft can disagree, and when they do a verifier that uses the spec agrees
+    with itself and disagrees with the object.
+
+    Three boolean approaches were built and measured, and all three are recorded
+    here rather than deleted, because each one ruled something out:
+      * a four-ring tube as the cutter - 2.8% open. A pipe's section is an
+        annulus, so the difference leaves the bore's core untouched: it milled a
+        square channel and left the groove floor bridging it.
+      * a solid prism spanning WALL - recess - 1.8% open, shell intact. The
+        prism started on the recessed floor and left a ring of uncut outer skin
+        0.85 mm proud of the bore.
+      * a solid prism spanning WALL + recess - 100% open and the shell GONE,
+        Body down to 0 vertices, X short by 13 mm. The length was right but the
+        walk is on a ROUNDED rectangle, so at the corners the prism juts
+        sideways into the side panels and the top.
+
+    So the length is not the last problem: the prism has to follow the local
+    surface normal and the LOCAL wall thickness, which means the loft has to
+    hand its per-row wall depth to this function rather than taking a constant.
+    """
+    span = WALL - UPPER_DEPTH
+    print("  band  prism %.4f cm (%.2f mm) over a %.2f mm wall"
+          % (span, span * 10, WALL * 10))
+    print("  field prism %.4f cm (%.2f mm) over a %.2f mm wall"
+          % (span, span * 10, WALL * 10))
+
     band = build_grille_field(
         mats, "BaseGrille",
         GRILLE_BAND_Z0 + 0.055, GRILLE_BAND_Z1 - 0.055,
-        GRILLE_RECESS, GRILLE_PITCH_X, GRILLE_HOLE_RX,
+        GRILLE_RECESS, span, GRILLE_PITCH_X, GRILLE_HOLE_RX,
         mask_fn=base_mask, seg=8, row_pitch=GRILLE_PITCH_Z,
         stagger=GRILLE_STAGGER, hole_rz=GRILLE_HOLE_RZ)
 
     field = build_grille_field(
         mats, "RearField",
         UPPER_Z0 + 0.10, UPPER_Z1 - 0.10,
-        UPPER_DEPTH, UPPER_PITCH_X, UPPER_HOLE_R,
+        UPPER_DEPTH, span, UPPER_PITCH_X, UPPER_HOLE_R,
         mask_fn=field_mask, seg=10, row_pitch=UPPER_PITCH_Z,
         stagger=UPPER_STAGGER)
+    print("  NOTE: these tubes are the bore walls, but nothing subtracts them")
+    print("        from the shell, so the panel is still sealed. Run")
+    print("        tools/ground_truth_open.py for the real open fraction - a")
+    print("        build that prints a hole count proves nothing about it.")
     return band, field
 
 

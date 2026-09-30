@@ -381,15 +381,54 @@ SKIP_RENDER=1 /Applications/Blender.app/Contents/MacOS/Blender --background \
 /Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
   --python blender/verify_ventilation.py                      # VENT_OK
 /Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
+  --python tools/check_blend.py                                # BLEND CHECK OK
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
+  --python tools/probe_field.py                                # FIELD OK
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
+  --python tools/check_grille_placement.py                     # PLACEMENT OK + VIEW NAMES OK
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
   --python blender/render_views.py -- renders 48              # RENDER_ALL_OK
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
+  --python blender/export_gltf.py                             # EXPORTED docs/mac-studio.glb
 python3 tools/check_framing.py                                # FRAMING OK
+python3 tools/publish_assets.py --check                       # ALL ASSETS CURRENT
 ```
 
-The five offline gates are independent on purpose: the spec's own self-test
+`check_blend.py` and `publish_assets.py --check` are the two that catch a
+*stale artefact* rather than a wrong model, which is the failure mode that
+survived everything else: see below.
+
+The offline gates are independent on purpose: the spec's own self-test
 proves it is internally consistent, `verify_spec.py` proves it matches
 photographs, `check_builder.py` proves the Blender script reads it rather
 than restating it, and `check_internals.py` proves the box it builds is
 physically sensible. Each catches a class the others cannot see.
+
+## Two `.blend` files, and nobody noticed
+
+`build_mac_studio.py` saves to `blender/mac_studio.blend`. Five tools —
+`render_views.py`, `export_gltf.py`, `inspect_bbox.py`, `ortho_compare.py`
+and `verify_ports.py` — resolved their path to the **repo root** instead.
+A second `.blend` was sitting there from an older build: **97 objects, no
+`RearField`, no perforated field, no bottom cover.** The correct one had 255.
+
+So every Cycles render and the published `docs/mac-studio.glb` were built
+from the broken machine — the one with two port rows and no rear — while the
+gates read the correct file. Both opened without error, a `.blend` always
+does, and each tool's own report was internally consistent. The only thing
+that distinguishes them is a count of what is inside.
+
+`tools/check_blend.py` now asserts there is exactly one `.blend`, that it has
+at least 200 objects, and that it contains `Body`, `RearField`, `BaseGrille`,
+`BottomCover` and `BottomIntake`. It was verified by mutation: with the stray
+present it fails and names the missing parts.
+
+`tools/publish_assets.py` closes the same gap one level up. `docs/images/`
+and `docs/thumbs/` are **tracked**, so a stale copy is invisible to git — the
+file exists, the size looks plausible, and nothing is dirty. Both sets were
+two days older than the model they depicted, produced by hand because no
+script existed for the step. Now `--check` compares mtimes and refuses to
+pass on a partial or stale set.
 
 ## The build had never run
 

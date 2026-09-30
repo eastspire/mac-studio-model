@@ -16,6 +16,13 @@ import mathutils
 from mathutils import Vector
 
 M = mathutils.Vector
+
+# The canonical .blend, written by build_mac_studio.py next to it. There was a
+# second, stale copy at the repo root (97 objects, no RearField) and this
+# resolved to it, so the verifier measured a different machine from the
+# one every other tool read.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+BLEND = os.path.join(_HERE, "mac_studio.blend")
 # Half-extent of the ortho frame. The machine is 19.7 cm across, so 10.6 cm
 # half-extent leaves a ~4% margin and fills the frame. At the previous 11.0
 # the block was fine, but the point of this camera is that the frame maps
@@ -38,7 +45,7 @@ def render_face(name, azimuth_deg, out_path, res=(1200, 1200), samples=64,
     proportions, so the same call works for the front, rear, sides, top and
     bottom and every result is directly comparable.
     """
-    bpy.ops.wm.open_mainfile(filepath="mac_studio.blend")
+    bpy.ops.wm.open_mainfile(filepath=BLEND)
     sc = bpy.context.scene
     sc.render.engine = "CYCLES"
     sc.cycles.samples = samples

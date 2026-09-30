@@ -14,6 +14,7 @@ usage: blender --background --factory-startup --python tools/check_grille_placem
 """
 import math
 import os
+import re
 import sys
 
 import bpy
@@ -113,51 +114,119 @@ def main():
     return 0
 
 
+def _views_of(module_name):
+    """Read a VIEWS list out of a render script without importing bpy.
+
+    These files are only importable inside Blender, so the list is parsed
+    with a regex instead. Three rigs had front/rear swapped, so the check has
+    to cover all of them, and it has to work from outside Blender.
+
+    The elevation is parsed as well as the azimuth, and it is not optional:
+    a top view is az 90, el 89, which without its elevation looks exactly
+    like a dead-on front elevation. Dropping it made the first version of
+    this check fail "top" and "bottom".
+
+    docs/viewer.js writes the same table with single quotes and Chinese
+    labels, and its "front"/"rear" are 正面/背面, so the label is mapped
+    before it is compared.
+    """
+    import re
+    path = os.path.abspath(os.path.join(ROOT, "blender", module_name))
+    if not os.path.exists(path):
+        return None
+    src = open(path, encoding="utf-8").read()
+    # `const VIEWS` in viewer.js, bare `VIEWS` in the two Python rigs.
+    # Non-greedy up to a line that is ONLY the closing bracket, so a "]," on a
+    # view tuple cannot end the capture early. A first attempt used a plain
+    # `.*?^\]`, which stopped at the first `]` inside the table and made all
+    # three files report "no VIEWS list found" - a vacuous pass, which is the
+    # one outcome this check must never produce.
+    m = re.search(r"^(?:const\s+)?VIEWS\s*=\s*\[(.*?)^\]\s*;?\s*$",
+                  src, re.S | re.M)
+    if not m:
+        return None
+    body = m.group(1)
+    out = []
+    for name, az, el in re.findall(
+            r"['\"]([^'\"]+)['\"]\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)", body):
+        out.append((CN_LABELS.get(name, name), float(az), float(el)))
+    return out or None
+
+
+# The viewer's labels are Chinese; map them to the same tokens the two Python
+# rigs use, so one table of expectations covers all three.
+CN_LABELS = {
+    "正面": "front",        # front
+    "背面": "rear",         # rear
+    "侧面": "side",         # side
+    "顶视": "top",          # top
+    "底视": "bottom",       # bottom
+    "前脸特写": "front_closeup",
+    "接口特写": "rear_closeup",
+    "3/4 透视": "hero",     # three-quarter
+}
+
+
 def check_view_names():
     """Every named view must actually look at the face it is named for.
 
-    The ortho rig had "front" and "rear" swapped: a view called front was
-    rendering the rear elevation, so a front/rear comparison was silently
-    comparing the wrong two images. The names look correct in the source and
-    the renders are all plausible, so nothing else catches it.
+    Three render rigs had "front" and "rear" swapped - ortho_measure.py,
+    render_views.py and docs/viewer.js - so a view called front was rendering
+    the rear elevation and vice versa. Every published image carried the wrong
+    label, and the viewer's 背面 button flew to the smooth front panel, hiding
+    the one face with the ports and the perforated field. The names look
+    correct in the source and the renders are all plausible, so nothing else
+    catches it.
     """
-    import importlib.util
-    here = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.join(ROOT, "blender", "ortho_measure.py")
-    spec = importlib.util.spec_from_file_location("ortho_measure", path)
-    if spec is None or spec.loader is None:
-        print("VIEW NAMES: cannot load %s" % path)
-        return 1
-    mod = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(mod)
-    except Exception as exc:                      # bpy is absent outside Blender
-        print("VIEW NAMES: skipped (%s)" % exc)
-        return 0
-    print()
     print("view-name check (+Y = FRONT, -Y = REAR):")
     bad = []
-    for name, az, el in mod.VIEWS:
-        a, e = math.radians(az), math.radians(el)
-        dx = math.cos(e) * math.cos(a)
-        dy = math.cos(e) * math.sin(a)
-        if dy > 0.5:
-            face = "+Y"
-        elif dy < -0.5:
-            face = "-Y"
-        elif dx > 0.5:
-            face = "+X"
-        elif dx < -0.5:
-            face = "-X"
-        else:
-            face = "top"
-        want = {"front": "+Y", "rear": "-Y", "right": "+X", "left": "-X",
-                "top": "top", "bottom": "top"}.get(name)
-        ok = (want is None) or (face == want)
-        print("  %-7s az %5.1f  looks at %-4s  expect %-4s  %s"
-              % (name, az, face, want or "-", "OK" if ok else "MISMATCH"))
-        if not ok:
-            bad.append(name)
+    for module in ("ortho_measure.py", "render_views.py", "../docs/viewer.js"):
+        views = _views_of(module)
+        if not views:
+            # A file whose VIEWS cannot be parsed is a FAILED check, not a
+            # skip. Reporting "no VIEWS list found" and then exiting 0 is how
+            # a broken regex turns this into a gate that always passes - which
+            # is the exact failure it exists to prevent, reproduced inside the
+            # check itself.
+            print("  %-22s COULD NOT PARSE VIEWS" % module)
+            bad.append("%s: unparseable VIEWS" % module)
+            continue
+        print("  %s:" % module)
+        for name, az, el in views:
+            ar, er = math.radians(az), math.radians(el)
+            dx = math.cos(er) * math.cos(ar)
+            dy = math.cos(er) * math.sin(ar)
+            if abs(math.sin(er)) > 0.9:
+                face = "top" if math.sin(er) > 0 else "bottom"
+            elif dy > 0.5:
+                face = "+Y"
+            elif dy < -0.5:
+                face = "-Y"
+            elif dx > 0.5:
+                face = "+X"
+            elif dx < -0.5:
+                face = "-X"
+            else:
+                face = "oblique"
+            # Match the leading token, so a numbered name like "01_front" or
+            # "12_rear_flat" is still checked. Keying on the exact string let
+            # every view in render_views.py fall through as "oblique", and
+            # that file would have reported OK while checking nothing - the
+            # same vacuous pass this check exists to prevent.
+            base = re.sub(r"^\d+_", "", name)
+            want = {"front": "+Y", "rear": "-Y", "right": "+X", "left": "-X",
+                    "top": "top", "bottom": "bottom"}.get(base)
+            if want is None:
+                # a three-quarter or macro shot: it shows the whole machine, so
+                # it has no single face to contradict
+                print("    %-18s az %6.1f el %5.1f  -> %-7s  (oblique, no face)"
+                      % (name, az, el, face))
+                continue
+            ok = face == want
+            print("    %-18s az %6.1f el %5.1f  -> %-7s expect %-7s %s"
+                  % (name, az, el, face, want, "OK" if ok else "MISMATCH"))
+            if not ok:
+                bad.append("%s:%s" % (module, name))
     if bad:
         print("VIEW NAMES FAILED: %s" % ", ".join(bad))
         return 1
