@@ -23,11 +23,31 @@ published tech specs.
 Height is the full 3.7 in **including the rubber feet** — the enclosure shell
 is 9.30 cm and the feet add 0.20 cm.
 
+Everything else on the machine is measured off Apple's product photography and
+checked by:
+
+```bash
+python3 tools/verify_spec.py        # 26 rear + 16 front + 7 band + 20 glyphs
+```
+
+All four groups measure the photograph and the model independently rather than
+restating a constant, and the run exits non-zero if anything drifts more than
+0.9 mm. Three further gates cover what that one cannot see:
+
+```bash
+python3 tools/check_builder.py      # the Blender script reads the spec, not a copy
+python3 tools/check_internals.py    # the box it builds is physically sensible
+python3 tools/check_otsu.py         # the comparison metric is handled everywhere
+```
+
+See [docs/VERIFICATION.md](docs/VERIFICATION.md) for the full table, the
+calibration rules, and the 27 errors the verification process found.
+
 **Source of truth:** <https://www.apple.com/mac-studio/specs/> — fetched
 2026-09-27, "Size and Weight" section. (Apple's older support page ID
 `121559` now 404s.)
 
-Reproduce the measurement:
+Reproduce the overall-size measurement:
 
 ```bash
 /Applications/Blender.app/Contents/MacOS/Blender --background \
@@ -36,24 +56,45 @@ Reproduce the measurement:
 
 ## What the model contains
 
-Matched against Apple's own product photography, not from memory:
+Every dimension below except the three overall ones is measured from Apple's
+own product photography and checked by `tools/verify_spec.py`, which exits
+non-zero if any feature drifts more than 0.9 mm from the photographs. The full
+record, including the errors that process found, is in
+**[docs/VERIFICATION.md](docs/VERIFICATION.md)**.
 
-- **Enclosure** — anodised silver aluminium, 1.6 cm vertical corner radius,
-  0.35 cm top/bottom edge break.
-- **Front** — smooth, uninterrupted silver. Two **vertical** USB-C ports and a
-  horizontal SDXC slot, grouped low on the left; status LED low on the right.
-  Every opening is a real boolean recess with a socket built wall-by-wall
-  (bright metal walls, shadowed back plate, contact tongue).
-- **Rear** — recessed connector bay (0.85 cm deep) holding, left to right as
-  you face the back of the machine: 4× Thunderbolt 5 (USB-C), 10Gb Ethernet
-  (RJ-45), power inlet, 2× USB-A, HDMI 2.1, 3.5 mm headphone jack. Order and
-  membership follow Apple's "Take a Tour of Mac Studio" guide.
-- **Underside** — a shallow **perforated band around the lower perimeter**
-  (1.6 cm tall on a 9.5 cm body, ~17%), with small round holes in staggered
-  rows and a solid lip below it. Genuine geometry: 1,253 individual tube
-  meshes, not a texture. Plus four rubber feet and the Touch ID power button.
+- **Enclosure** — anodised silver aluminium, 1.05 cm vertical corner radius,
+  0.38 cm top/bottom edge break.
+- **Front** — 2× **vertical** USB-C and a 27.0 × 2.7 mm horizontal SDXC slot,
+  grouped on the left; a 2.7 mm white status LED on the right. Every opening
+  is a real boolean recess with a socket built wall-by-wall (bright metal
+  walls, shadowed back plate, contact tongue).
+- **Rear** — 4× Thunderbolt 5 (USB-C), 10Gb Ethernet (RJ-45), a three-lobed
+  mains inlet, 2× USB-A, HDMI 2.1, 3.5 mm headphone jack, Touch ID. All front
+  and rear connectors share one centre height, 23.5 mm above the foot plane.
+  Every x position is within 0.1 mm of the photograph.
+- **Perforated rear field** — one large grille, 171.5 mm wide, from 4.7 to
+  52.8 mm below the top. 1.86 × 1.57 mm lattice, alternate rows offset by a
+  fifth of a pitch, 1.42 mm holes, 54% open.
+- **Base band** — a 7.4 mm perforated band wrapping the **whole perimeter**
+  (front, both sides, rear). Its lattice is *not* a scaled copy of the rear
+  field: 1.962 × 0.906 mm, unstaggered, with obround 1.28 × 0.53 mm holes at
+  41% open. Genuine geometry, not a texture.
+- **Rear icons** — the five engraved decals (Thunderbolt, Ethernet, USB, HDMI,
+  headphone) are **measured glyph geometry**, not a font and not a drawing:
+  each is a set of polygons, round-capped strokes and arcs whose bounding boxes
+  match the photograph to within 0.28 mm. A Blender text object could never be
+  checked this way, because font metrics say nothing about what gets rendered.
 - **Top / sides** — plain, with no logo, text, or vents. The current enclosure
   has no top marking; the 2014–2020 shell carried an Apple logo.
+- **Internals** — two blower assemblies with shrouds, ducts, hubs and 11 swept
+  blades each; a finned heatsink; the copper heat-pipe plane; the logic board
+  with memory and two SSDs; the power supply with its copper coil; a row of
+  electrolytics standing on the floor frame; speaker and front I/O; the
+  internal frame. Heights, widths and centre offsets are **measured off
+  Apple's X-ray cutaways** — the blowers are 59 mm wide at ±62 mm, which the
+  previous build had wrong by 25 mm and 17 mm respectively. See
+  [docs/VERIFICATION.md](docs/VERIFICATION.md#internals) for what that
+  reference can and cannot settle.
 
 Materials: Principled BSDF throughout — silver `Metallic 1.0 / Roughness 0.19`,
 dark anodised grille, matte black cavity, rubber feet, emissive status LED.
@@ -213,14 +254,22 @@ than an error.
 
 ## Known deviations
 
+- **The `.blend` and the Cycles renders on disk are stale.** Blender cannot
+  start in the sandbox this model was authored in — it segfaults inside Metal's
+  GPU backend detection before any Python runs. `blender/build_mac_studio.py`
+  has therefore never been executed here, and `mac_studio.blend` is the
+  pre-rewrite artefact. The geometry is verified against the **source** by
+  `tools/verify_spec.py` (measured against Apple's photographs) and by the
+  offline renderer in `tools/compare_render.py`, not by a Blender render. To
+  regenerate on an unsandboxed machine:
+  `SKIP_RENDER=1 /Applications/Blender.app/Contents/MacOS/Blender --background --python blender/build_mac_studio.py`
 - **Port micro-detail.** Connector internals (pin pitch, latch cutouts,
   SDXC contact rows) are represented, not reproduced. A production asset would
   use a manufacturer CAD import.
-- **Grille perforation pitch** is 3 mm, chosen to read at render scale; the
-  real perforation is finer.
 - **Finish.** Machining anisotropy, the fine bead-blast texture, and the exact
   anodised tone are approximated with a single isotropic roughness value.
 - **No Apple logo or silkscreen.** The current enclosure has none; the earlier
-  (2014–2020) shell did.
+  (2014–2020) shell did. The rear port icons (Thunderbolt, Ethernet, USB, HDMI,
+  headphone) and the Touch ID power glyph are modelled as engraved decals.
 - **Colour management** is left at Blender's default Filmic/AgX view transform
   rather than being matched against a calibrated reference.

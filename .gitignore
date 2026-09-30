@@ -13,9 +13,26 @@ renders/tiny/
 *.blend1
 mac_studio.blend
 
+# Measurement scratch. Working crops, crops-of-crops, ASCII dumps, candidate
+# lattice overlays and per-band comparison sheets. Everything here is
+# reproducible from tools/ plus reference/ and none of it is an input to the
+# build, so tracking it would only add ~17 MB of intermediate images that go
+# stale on the next run.
+renders/compare/
+
+# Scratch working directory: a throwaway Blender.app (973 MB), .bak copies,
+# compiled dylib and object-file debris from an injection probe, captured
+# stdout and ad-hoc probe scripts. Nothing in here is an input to anything,
+# and the size alone makes it uncommittable.
+tmp/
+
 # Python
 __pycache__/
 *.pyc
 
 # OS
 .DS_Store
+# AppleDouble sidecars. macOS creates ._name for names containing a colon, and
+# the resource-fork copy shows up as a .!NNN!name file next to the original.
+._*
+.!*

@@ -1,12 +1,29 @@
-"""Mac Studio (2024/2025/2026, aluminum) 1:1 model — headless bpy build.
+"""Mac Studio (2026, M5 Max) 1:1 model — headless bpy build.
 
-Official specs (https://www.apple.com/mac-studio/specs/, fetched 2026-09-27):
-    Height  3.7 in (9.5 cm)
-    Width   7.7 in (19.7 cm)
-    Depth   7.7 in (19.7 cm)
+Official specs (https://www.apple.com/mac-studio/specs/, checked 2026-09-30;
+Apple Support 128107 for the 2026 machine):
+    Height  3.7 in (9.5 cm)      Weight 6.0 lb (2.7 kg)
+    Width   7.7 in (19.7 cm)     Rear:  4x Thunderbolt 5 (USB-C), 10GbE,
+    Depth   7.7 in (19.7 cm)            AC inlet, 2x USB-A, HDMI 2.1,
+                                        3.5 mm headphone, power button
+                                    Front: 2x USB-C, SDXC, status LED
 
-Orientation: -Y = front, +Y = back, +Z = up, origin at footprint centre on the
-table surface. Units are centimetres (scene scale_length = 1.0).
+Orientation: -Y = front, +Y = back, +Z = up, origin at the footprint centre on
+the table surface. Units are centimetres (scene scale_length = 1.0).
+
+EVERY dimension below except the three overall ones is MEASURED, in
+millimetres, off Apple's own flat product photography, and converted to cm.
+The measurement tools live in ../tools:
+
+    measure_cc.py        connected-component pass over the rear port row
+    measure_front.py     front openings, the status LED, the edge radii
+    measure_ref.py       chassis box, gross bands, hole pitch
+
+The conversion is: the chassis is 197 mm wide in every shot, so the pixel-to-mm
+scale follows from the chassis bounding box, and anything measured as a
+fraction of that box is in millimetres. Re-measure rather than trusting the
+comments here — several of the numbers below replaced values that had been
+"verified against Apple's diagram" and were still wrong.
 """
 
 import math
@@ -17,62 +34,105 @@ import bpy
 import bmesh
 from mathutils import Vector
 
+# Blender does NOT put the script's own directory on sys.path when it is run
+# with `--python <file>`, so `from mac_studio_spec import ...` below failed
+# with ModuleNotFoundError and the build never ran - which is why the .blend
+# on disk and every render in renders/ were stale artefacts from an earlier
+# revision. The paths are derived from __file__ precisely so the script can be
+# launched from any working directory; the import has to follow the same rule.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
 # ---------------------------------------------------------------- parameters
-W = 19.7          # X, width
-D = 19.7          # Y, depth
-H_TOTAL = 9.5     # Z, full height incl. feet
-FOOT_H = 0.2      # rubber feet height
-BODY_H = H_TOTAL - FOOT_H
-R_VERT = 1.05     # vertical corner radius. Apple calls the shell "a single piece
-                  # of aluminium"; the corner is a crisp machined break, NOT a
-                  # soft pillow. At 1.6 cm it was 8.1% of the 19.7 cm width and
-                  # every elevation read as a bulging pillow even though the
-                  # panel geometry was provably flat (99 front-face verts, all
-                  # at y = -9.8500, spread 0.0000 cm).
-R_HORZ = 0.48     # top/bottom edge fillet. Slightly LARGER than the vertical
-                  # corner: on the real part the top edge break is the softer
-                  # of the two, and 0.35 read as a hard machined edge.
-ARC_SEG = 20      # segments per rounded corner. At 8 the corner read as a
-                  # visible faceted curve — a flat-shaded 8-gon arc against a
-                  # 19.7 cm face is obvious, and it is most of what made the
-                  # silhouette look soft rather than machined.
+# Every measured dimension lives in mac_studio_spec.py and is imported, not
+# restated. This file used to carry its own copy of the whole measured block,
+# which is how a spec correction could land, pass its own self-test, and still
+# not reach the model: the build looked complete and ran, with the old numbers.
+# There is now exactly one source of truth, and tools/verify_spec.py measures
+# that source against Apple's photographs.
+from mac_studio_spec import (            # noqa: E402,F401  (F401: re-exported)
+    W, D, H_TOTAL, FOOT_H, BODY_H, R_VERT, R_HORZ,
+    FIELD_TOP_MM, FIELD_BOT_MM, UPPER_Z0, UPPER_Z1, UPPER_HALF_X, UPPER_DEPTH,
+    UPPER_PITCH_X, UPPER_PITCH_Z, UPPER_STAGGER, UPPER_HOLE_R,
+    GRILLE_BAND_Z0, GRILLE_BAND_Z1, GRILLE_PITCH_X, GRILLE_PITCH_Z,
+    GRILLE_STAGGER, GRILLE_HOLE_RX, GRILLE_HOLE_RZ, GRILLE_RECESS,
+    IO_Z, REAR_PORTS, AC_INLET_X, AC_INLET_W, AC_INLET_H,
+    HEADPHONE_X, HEADPHONE_R, POWER_BTN_X, POWER_BTN_R, ICON_Z,
+    POWER_BTN_GAP_W, POWER_BTN_GLYPH_R, POWER_BTN_GLYPH_W,
+    POWER_BTN_GLYPH_A0, POWER_BTN_GLYPH_A1,
+    ICON_TB_X, ICON_ETH_X, ICON_USB_X, ICON_HDMI_X, ICON_HP_X,
+    FRONT_PORTS, LED_X, LED_R, FOOT_XY, FOOT_R,
+    ARC_SEG,
+    FAN_Z, FAN_X, FAN_R, FAN_SHROUD_W, FAN_SHROUD_D, FAN_SHROUD_H,
+    SPINE_W, SPINE_Z0, SPINE_Z1, SPINE_D, SPINE_BREAK_Z0, SPINE_BREAK_Z1,
+    SPINE_BREAK_HALF_X,
+    HEATSINK_Z, PCB_Z, WALL, PIPE_Z, PSU_Z, SPEAKER_Z,
+    io_row_check,
+)
+import mac_studio_spec as S              # noqa: E402  (the glyph tables)
 
-OUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "renders"))
-BLEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "mac_studio.blend"))
+# Output paths. These are derived from this file's own location rather than
+# from the working directory, because Blender is routinely launched from
+# elsewhere (`blender --background --python .../build_mac_studio.py`) and a
+# relative path would then write the .blend and the renders somewhere nobody
+# looks. _HERE is computed above, before the spec import, for sys.path.
+OUT_DIR = os.path.join(_HERE, "..", "renders")
+BLEND = os.path.join(_HERE, "mac_studio.blend")
 
-
+problems = io_row_check()
+if problems:
+    raise SystemExit("measured spec is self-inconsistent:\n  " +
+                     "\n  ".join(problems))
 # ------------------------------------------------------------------ materials
-def make_mat(name, base, metallic, rough):
+def make_mat(name, base, metallic, rough, emit=None, emit_strength=0.0):
     m = bpy.data.materials.new(name)
     m.use_nodes = True
     bsdf = m.node_tree.nodes.get("Principled BSDF")
-    if bsdf is None:  # 4.x always has it, but be explicit
+    if bsdf is None:
         bsdf = next(n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
     bsdf.inputs["Base Color"].default_value = (*base, 1.0)
     bsdf.inputs["Metallic"].default_value = metallic
     bsdf.inputs["Roughness"].default_value = rough
+    if emit is not None:
+        # Blender 4.x renamed the emission sockets.
+        for key in ("Emission Color", "Emission"):
+            if key in bsdf.inputs:
+                bsdf.inputs[key].default_value = (*emit, 1.0)
+                break
+        if "Emission Strength" in bsdf.inputs:
+            bsdf.inputs["Emission Strength"].default_value = emit_strength
     m.diffuse_color = (*base, 1.0)
     return m
 
 
 def build_materials():
     return {
-        # anodised silver aluminium, satin finish. Real Mac Studio aluminium
-        # reads noticeably reflective in a studio setup — too high a roughness
-        # makes it look like matte plastic, which is the single biggest
-        # giveaway that a render is CG rather than a product photo.
-        "alu": make_mat("Aluminium_Silver", (0.760, 0.767, 0.775), 1.0, 0.19),
-        # dark anodised bottom grille plate
-        "grille": make_mat("Grille_DarkAlu", (0.135, 0.138, 0.142), 0.75, 0.42),
-        # unlit cavity seen through the perforations
-        "cavity": make_mat("Cavity_Black", (0.016, 0.016, 0.018), 0.0, 0.70),
-        # connector bodies: dark grey plastic, not pure black — a pure black
-        # socket interior renders as a flat silhouette with no readable shape
-        "port": make_mat("Port_Black", (0.075, 0.076, 0.080), 0.0, 0.42),
-        # rubber feet
-        "rubber": make_mat("Foot_Rubber", (0.045, 0.045, 0.048), 0.0, 0.85),
-        # status LED
-        "led": make_mat("Status_LED", (0.85, 0.90, 0.95), 0.0, 0.20),
+        # Anodised silver aluminium. Apple's shell is a metal, and the giveaway
+        # that a render is CG is a body that reads as white plastic: that means
+        # the base colour is too bright for the environment and the roughness
+        # too high for the form. Measured off the product shots, the panel sits
+        # around 78-84% grey in the lit areas, so the reflectance here is set
+        # well below white and the environment supplies the rest.
+        "alu": make_mat("Aluminium_Silver", (0.560, 0.566, 0.578), 1.0, 0.205),
+        # The recessed field floor and the base band read a shade darker than
+        # the outer skin because they are in their own shadow.
+        "grille": make_mat("Grille_DarkAlu", (0.115, 0.118, 0.122), 0.70, 0.44),
+        "cavity": make_mat("Cavity_Black", (0.012, 0.012, 0.014), 0.0, 0.72),
+        "port": make_mat("Port_Black", (0.055, 0.056, 0.060), 0.0, 0.40),
+        "rubber": make_mat("Foot_Rubber", (0.035, 0.035, 0.038), 0.0, 0.86),
+        "led": make_mat("Status_LED", (0.92, 0.94, 0.97), 0.0, 0.18,
+                        emit=(0.92, 0.95, 1.00), emit_strength=2.4),
+        # Engraved silkscreen: filled with a dark grey lacquer.
+        "silk": make_mat("Silkscreen", (0.085, 0.086, 0.090), 0.0, 0.55),
+        # Internals.
+        "fan": make_mat("Fan_Plastic", (0.045, 0.045, 0.048), 0.0, 0.55),
+        "pcb": make_mat("PCB_Green", (0.030, 0.085, 0.048), 0.0, 0.62),
+        "alu_raw": make_mat("Aluminium_Raw", (0.400, 0.404, 0.412), 1.0, 0.42),
+        "copper": make_mat("Heatpipe_Copper", (0.72, 0.45, 0.28), 1.0, 0.24),
+        "chip": make_mat("Silicon", (0.020, 0.020, 0.024), 0.25, 0.22),
+        "memory": make_mat("DRAM", (0.075, 0.076, 0.082), 0.0, 0.50),
+        "insul": make_mat("Insulation", (0.130, 0.128, 0.120), 0.0, 0.78),
     }
 
 
@@ -80,17 +140,14 @@ def build_materials():
 def rounded_rect(hx, hy, r, seg=ARC_SEG, edge_sub=4):
     """CCW point ring of a rounded rectangle.
 
-    Every straight edge is subdivided into `edge_sub` extra points: without
-    them a flat panel becomes one enormous quad, and auto-shaded normals across
-    it produce the visible horizontal banding on the front face.
+    Every straight edge is subdivided: without that a flat panel is one huge
+    quad and auto-smoothed normals across it band visibly. The corner arc
+    centres are inset by r — using the edge midpoint instead pushes the whole
+    path outward by exactly r and inflates the bounding box.
     """
     r = max(0.02, min(r, hx - 0.02, hy - 0.02))
-    corners = (
-        (hx - r, hy - r, 0.00),
-        (-hx + r, hy - r, 0.25),
-        (-hx + r, -hy + r, 0.50),
-        (hx - r, -hy + r, 0.75),
-    )
+    corners = ((hx - r, hy - r, 0.00), (-hx + r, hy - r, 0.25),
+               (-hx + r, -hy + r, 0.50), (hx - r, -hy + r, 0.75))
     arcs = []
     for cx, cy, start in corners:
         pts = []
@@ -113,11 +170,10 @@ def rounded_rect(hx, hy, r, seg=ARC_SEG, edge_sub=4):
 def boolean_diff(body, cutter, label="Cut"):
     """Apply an EXACT boolean difference and drop the cutter.
 
-    The body MUST already be triangulated (see triangulate_caps): the lofted
-    shell's top/bottom caps are large non-planar n-gons, and the EXACT solver
-    mis-resolves their winding. Symptom of skipping it: the boolean "succeeds"
-    but merges the cutter's outer half into the shell, and the bbox grows by
-    the cutter's overhang instead of shrinking.
+    The body MUST already be triangulated: the lofted shell's caps are large
+    non-planar n-gons and EXACT mis-resolves their winding. Symptom of skipping
+    it: the boolean "succeeds" but merges the cutter's outer half into the shell
+    and the bbox grows by the cutter's overhang instead of shrinking.
     """
     triangulate_caps(body)
     bpy.context.view_layer.objects.active = body
@@ -132,10 +188,7 @@ def boolean_diff(body, cutter, label="Cut"):
 
 
 def cut_from_body(body, name, cx, cy, cz, sx, sy, sz, bevel=0.0, mats=None):
-    """Boolean-difference a rounded box out of the shell — a real recess.
-
-    See boolean_diff for why the body has to be triangulated first.
-    """
+    """Boolean a rounded box out of the shell — a real recess, not a decal."""
     cutter = add_box("_cut_" + name, cx, cy, cz, sx, sy, sz,
                      (mats or {}).get("cavity") or bpy.data.materials["Cavity_Black"],
                      bevel=bevel)
@@ -143,20 +196,13 @@ def cut_from_body(body, name, cx, cy, cz, sx, sy, sz, bevel=0.0, mats=None):
 
 
 def paint_recess_black(obj, y_lo, y_hi, x_extent, z_lo, z_hi, slot=1):
-    """Force every face inside a rear recess to the cavity material.
+    """Force every face inside a recess to the cavity material.
 
-    A boolean difference flips the cutter's geometry to become the recess's
-    walls, but those flipped faces keep the SHELL's material index — the bay
-    ended up with 45 aluminium faces at its back wall (y=9.75), so the port bay
-    read as a bright silver recess instead of a black cavity. The cutter's own
-    material does not help: EXACT only carries a material across if the target
-    lacks the slot, and the target already has two.
-
-    Select by volume, not by normal: the recess's back wall has a normal
-    pointing *into* the bay, same as its side walls, so a normal test misses it.
+    A boolean difference flips the cutter's faces to become the recess walls,
+    but they keep the SHELL's material index. Select by volume, not by normal:
+    a recess's back wall points into the recess, same as its side walls.
     """
-    me = obj.data
-    for p in me.polygons:
+    for p in obj.data.polygons:
         c = p.center
         if (y_lo < c.y < y_hi and abs(c.x) < x_extent
                 and z_lo < c.z < z_hi):
@@ -167,9 +213,8 @@ def paint_recess_black(obj, y_lo, y_hi, x_extent, z_lo, z_hi, slot=1):
 def triangulate_caps(obj):
     """Make the whole mesh triangles, once.
 
-    The guard must look at polygon sizes, not at `data.loop_triangles` — that
-    cache is lazily filled, so its length is unreliable before the first
-    tessellation and the check would re-triangulate on every cut.
+    Guard on polygon sizes, not on `data.loop_triangles` — that cache is lazily
+    filled, so its length is unreliable before the first tessellation.
     """
     if not obj.data.polygons or all(len(p.vertices) == 3 for p in obj.data.polygons):
         return
@@ -193,39 +238,79 @@ def fillet_inset(z, z_lo, z_hi):
     return 0.0
 
 
-def build_body(mats):
-    """Lofted rounded box: exact 19.7 x 19.7 footprint, 9.5 tall incl. feet.
+# -------------------------------------------------------------- grille masks
+def base_mask(px, py, half_x, half_y):
+    """The base band wraps the entire perimeter: always 1.0.
 
-    The perforated band around the lower perimeter is a genuine recess in this
-    loft, not a boolean cut: `grille_inset` pulls the profile inboard across
-    the band height so the groove is part of the surface from the start. A
-    boolean was the obvious approach and it fought back three separate ways —
-    a cutter tangent to the skin cuts nothing, a cutter buried inside the shell
-    cuts nothing, and a cutter proud of the skin leaves the difference as new
-    geometry and inflates the bounding box by the overshoot (+1.16 mm). None of
-    those failures is visible from the vertex count or the bbox alone.
+    It is visible on the front panel in Apple's front product shot, not just
+    around the back. An earlier build keyed this on the rear panel and left the
+    front's lower edge as bare metal.
+    """
+    return 1.0
+
+
+def field_mask(px, py, half_x, half_y):
+    """The upper field is a plain RECTANGLE on the REAR panel.
+
+    Sign convention, which is the whole bug this function used to have: in
+    this model +Y is the FRONT face (the front sockets are at y = +D/2) and
+    -Y is the rear, where the ports and the exhaust grille are. So the rear
+    panel is py < 0, and the test must reject py > 0.
+
+    The previous version tested `py <= 0.0: return 0.0`, which kept only
+    py > 0 - the front. The consequence was quiet and total: the perforated
+    field was built across the FRONT panel and the rear was left bare. The
+    object was still called "RearField" and the build log still printed a
+    plausible hole count, and the front render came back with dark horizontal
+    bands that Apple's front panel does not have.
+
+    Keyed on geometry, not arc length. On a rounded square the rear panel and
+    each side span the same range of the other axis, so a single-axis test
+    lights up the side panels and leaves the back bare - which is what the
+    earlier arc-length version did.
+    """
+    if py >= 0.0:
+        return 0.0                      # front half: no field
+    if abs(px) <= UPPER_HALF_X:
+        return 1.0
+    t = (abs(px) - UPPER_HALF_X) / max(1e-6, half_x - UPPER_HALF_X)
+    if t >= 1.0:
+        return 0.0
+    return 1.0 - t * t * (3.0 - 2.0 * t)
+
+
+def grille_inset(z, mask):
+    """Extra profile inset at height z. Steps, not ramps: the real part has a
+    flat groove floor and a sharp edge."""
+    if GRILLE_BAND_Z0 - 1e-6 <= z <= GRILLE_BAND_Z1 + 1e-6:
+        return GRILLE_RECESS * mask
+    if UPPER_Z0 - 1e-6 <= z <= UPPER_Z1 + 1e-6:
+        return UPPER_DEPTH * mask
+    return 0.0
+
+
+# ------------------------------------------------------------------ the body
+def build_body(mats):
+    """Lofted rounded box, then hollowed so the internals are visible.
+
+    The perforations are genuine recesses in the loft rather than boolean cuts.
+    A boolean fights back three separate ways here: a cutter tangent to the
+    skin cuts nothing, one buried inside cuts nothing, and one proud of the skin
+    leaves the difference behind as new geometry that inflates the bounding box
+    by the overshoot (measured: +1.16 mm). None of those is visible from the
+    vertex count alone.
     """
     z_lo, z_hi = FOOT_H, H_TOTAL
-    z_g0, z_g1 = GRILLE_BAND_Z0, GRILLE_BAND_Z1
-
     levels = []
     steps = 8
     for i in range(steps + 1):                       # bottom fillet
         levels.append(z_lo + R_HORZ * (1.0 - math.cos(math.pi / 2 * i / steps)))
-    for i in range(GRILLE_LEVELS + 1):               # base band
-        levels.append(z_g0 + (z_g1 - z_g0) * i / GRILLE_LEVELS)
-    for i in range(LOWER_F_LEVELS + 1):           # lower rear field
-        levels.append(LOWER_F_Z0 + (LOWER_F_Z1 - LOWER_F_Z0)
-                      * i / LOWER_F_LEVELS)
-    for i in range(UPPER_LEVELS + 1):                # upper rear/side field
-        levels.append(UPPER_Z0 + (UPPER_Z1 - UPPER_Z0) * i / UPPER_LEVELS)
+    for i in range(4):                               # base band
+        levels.append(GRILLE_BAND_Z0 + (GRILLE_BAND_Z1 - GRILLE_BAND_Z0) * i / 3.0)
+    for i in range(9):                               # upper field
+        levels.append(UPPER_Z0 + (UPPER_Z1 - UPPER_Z0) * i / 8.0)
     for i in range(steps + 1):                       # top fillet
         levels.append(z_hi - R_HORZ * (1.0 - math.cos(math.pi / 2 * i / steps)))
-    # A field's top edge can sit above the midpoint, so appending field levels
-    # before the straight band and the top fillet leaves the list out of order
-    # and the loft folds through itself — which showed up as a bounding box
-    # 4.6 cm short in Z rather than an error. Sort and dedupe; a level list
-    # must be strictly increasing for the loft to be a solid.
     levels = sorted(set(round(v, 4) for v in levels))
 
     verts, faces, mats_per_face = [], [], []
@@ -233,28 +318,13 @@ def build_body(mats):
 
     for z in levels:
         base_d = fillet_inset(z, z_lo, z_hi)
-        prof = rounded_rect(hx - base_d, hy - base_d, R_VERT - base_d)
-        # The upper and lower perforated fields stop short of the front face,
-        # so their recess depth is a function of position around the perimeter,
-        # not just of z. Measure it on the UNINSET profile, then re-proportion
-        # each point to the inset profile — scaling by the profile's own extents
-        # keeps the rounded corners correct instead of squashing them.
-        #
-        # The base band is a full-perimeter recess in the ORIGINAL design and a
-        # rear-panel-only one now; either way the mask below decides. Note the
-        # recess must be keyed on the same arc as the hole placement, or the
-        # two drift and the tubes end up buried inside solid metal.
         ux0, uy0 = hx - base_d, hy - base_d
+        prof = rounded_rect(ux0, uy0, R_VERT - base_d)
+        in_band = GRILLE_BAND_Z0 - 1e-6 <= z <= GRILLE_BAND_Z1 + 1e-6
+        mask_fn = base_mask if in_band else field_mask
         for px, py in prof:
-            # Same call the hole placement makes, on the same profile, so the
-            # recess and the holes stop at the same place. If the recess ran
-            # wider there would be a shallow channel running off the back onto
-            # the sides with no holes in it — visible in raking light.
-            ff = arc_factor(px, py, ux0, uy0, BASE_FRONT_GAP,
-                            FIELD_REAR_FADE_CM, in_base=False)
-            if ff < 0.5:
-                ff = 0.0
-            d = base_d + grille_inset(z, ff)
+            m = mask_fn(px, py, ux0, uy0)
+            d = base_d + grille_inset(z, m)
             verts.append((px / ux0 * (hx - d), py / uy0 * (hy - d), z))
 
     n = len(rounded_rect(hx, hy, R_VERT))
@@ -263,11 +333,11 @@ def build_body(mats):
         for i in range(n):
             j = (i + 1) % n
             faces.append((a + i, a + j, b + j, b + i))
-            mats_per_face.append(0)                  # aluminium
+            mats_per_face.append(0)
 
-    faces.append(tuple(range(n - 1, -1, -1)))        # bottom cap -> cavity black
+    faces.append(tuple(range(n - 1, -1, -1)))            # bottom cap
     mats_per_face.append(1)
-    faces.append(tuple(range((len(levels) - 1) * n, len(levels) * n)))  # top cap
+    faces.append(tuple(range((len(levels) - 1) * n, len(levels) * n)))
     mats_per_face.append(0)
 
     me = bpy.data.meshes.new("Body")
@@ -285,24 +355,54 @@ def build_body(mats):
     return obj
 
 
+def hollow_body(body, mats):
+    """Turn the solid loft into a real shell with a 1.5 mm wall.
+
+    Without this the body is a solid block and the internals are invisible
+    except through the perforations — which is not what the machine is, and
+    makes a cutaway view useless.
+    """
+    wall = 0.15
+    # The cutter must sit INSIDE the skin, leaving `wall` of aluminium on
+    # every face. It used to be sized (W - 2*wall) * 2 - 2*R_VERT, i.e. twice
+    # the chassis width, so it passed straight through both side walls - and
+    # through the front and back as well, since the same doubling applied on
+    # Y. The result was a shell with no front and no rear skin: rays fired
+    # from +Y landed on the AC inlet, the logic board and the heatsink, and
+    # the front render came back showing the machine's insides.
+    #
+    # Note the units: W, D and H_TOTAL are in CENTIMETRES and the helper
+    # takes centimetres, so the inset is a straight subtraction. The *2 was
+    # never needed - the lofted profile is already W across.
+    cut_x = W - 2 * wall
+    cut_y = D - 2 * wall
+    cut_z = (H_TOTAL - 0.18) - (FOOT_H + 0.22)
+    inner = add_box("_cut_cavity", 0.0, 0.0, (FOOT_H + 0.22 + H_TOTAL - 0.18) / 2.0,
+                    cut_x, cut_y, cut_z,
+                    bpy.data.materials["Cavity_Black"],
+                    bevel=max(R_VERT - wall, 0.01))
+    if inner.dimensions.x > W or inner.dimensions.y > D:
+        print("  WARNING: cavity cutter %.1f x %.1f mm exceeds the chassis"
+              % (inner.dimensions.x * 10, inner.dimensions.y * 10))
+    boolean_diff(body, inner, "Hollow")
+    print("  hollowed: %d verts  (wall %.2f mm, cutter %.1f x %.1f mm)"
+          % (len(body.data.vertices), wall * 10, cut_x * 10, cut_y * 10))
+    return body
+
+
+# --------------------------------------------------------- object primitives
 def auto_smooth(obj, angle):
-    """Blender 4.1+ replaced mesh.use_auto_smooth with an operator/modifier."""
     bpy.context.view_layer.objects.active = obj
     for o in bpy.context.selected_objects:
         o.select_set(False)
     obj.select_set(True)
     try:
-        bpy.ops.object.shade_auto_smooth(angle=angle)   # 4.2+
+        bpy.ops.object.shade_auto_smooth(angle=angle)          # 4.2+
     except Exception:
         try:
-            bpy.ops.object.shade_smooth_by_angle(angle=angle)   # 4.1
+            bpy.ops.object.shade_smooth_by_angle(angle=angle)  # 4.1
         except Exception:
             bpy.ops.object.shade_smooth()
-
-
-def link(obj, mats):
-    bpy.context.collection.objects.link(obj)
-    return obj
 
 
 def simple_mesh(name, verts, faces, mat, smooth=False):
@@ -312,22 +412,33 @@ def simple_mesh(name, verts, faces, mat, smooth=False):
     me.materials.append(mat)
     me.update()
     obj = bpy.data.objects.new(name, me)
-    link(obj, None)
+    bpy.context.collection.objects.link(obj)
     if smooth:
         auto_smooth(obj, math.radians(50))
     return obj
 
 
-def add_box(name, cx, cy, cz, sx, sy, sz, mat, bevel=0.0):
-    bpy.ops.mesh.primitive_cube_add(size=1.0, location=(cx, cy, cz))
+def add_box(name, cx, cy, cz, sx, sy, sz, mat, bevel=0.0, rot=None):
+    """A box, positioned and optionally rotated about its OWN centre.
+
+    `rot` must be passed to the primitive, not assigned afterwards. These
+    helpers end with `transform_apply`, which bakes location/rotation/scale
+    into the mesh and leaves the object's origin at the world origin - so a
+    later `obj.rotation_euler = ...` spins the baked world-space mesh about
+    (0,0,0) and throws the part clean off the machine. That is not a
+    hypothetical: the fan blades and the heat pipes were both built this way,
+    and the heat pipes ended up 63 mm below the table, taking the whole model's
+    height to 158 mm.
+    """
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=(cx, cy, cz),
+                                    rotation=rot or (0.0, 0.0, 0.0))
     obj = bpy.context.active_object
     obj.name = name
     obj.scale = (sx, sy, sz)
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     if bevel > 0.0:
-        # A bevel wider than half the shortest side self-intersects, and the
-        # EXACT boolean solver then silently fails to cut (the cutter's own
-        # bounds get merged into the shell instead). Clamp it.
+        # A bevel wider than half the shortest side self-intersects, and EXACT
+        # then silently fails to cut. Clamp it.
         bevel = min(bevel, 0.45 * min(abs(sx), abs(sy), abs(sz)))
         mod = obj.modifiers.new("Bevel", "BEVEL")
         mod.width = bevel
@@ -337,195 +448,97 @@ def add_box(name, cx, cy, cz, sx, sy, sz, mat, bevel=0.0):
     return obj
 
 
-def add_cylinder(name, cx, cy, cz, r, h, mat, verts=48, axis="Z"):
-    rot = {"Z": (0, 0, 0), "Y": (math.pi / 2, 0, 0), "X": (0, math.pi / 2, 0)}[axis]
+def add_cylinder(name, cx, cy, cz, r, h, mat, verts=48, axis="Z", smooth=True,
+                 rot=None):
+    """A cylinder, optionally rotated about its own centre. See add_box for
+    why the rotation has to arrive here rather than being assigned after."""
+    base = {"Z": (0, 0, 0), "Y": (math.pi / 2, 0, 0),
+            "X": (0, math.pi / 2, 0)}[axis]
+    use = rot if rot is not None else base
     bpy.ops.mesh.primitive_cylinder_add(
-        vertices=verts, radius=r, depth=h, location=(cx, cy, cz), rotation=rot
+        vertices=verts, radius=r, depth=h, location=(cx, cy, cz), rotation=use
     )
     obj = bpy.context.active_object
     obj.name = name
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-    mod = obj.modifiers.new("Bevel", "BEVEL")
-    mod.width = min(0.02, h * 0.35, r * 0.25)
-    mod.segments = 2
-    mod.limit_method = "ANGLE"
     obj.data.materials.append(mat)
-    auto_smooth(obj, math.radians(40))
+    if smooth:
+        auto_smooth(obj, math.radians(40))
     return obj
 
 
-# ------------------------------------------------------- perforated base band
-# The real Mac Studio does NOT have a grille across the whole bottom. It has a
-# shallow perforated band running around the lower perimeter — roughly 1.1 cm
-# tall on a 9.5 cm body (~12%), with a solid lip below it and the perforated
-# field wrapping around the front and side corners. Holes are small circles in
-# staggered rows, not hexagons. (Verified against Apple's own product photos:
-# the front face is smooth silver above this band.)
-# Ventilation, laid out from Apple's own rear hardware diagram
-# (/v/mac-studio/o/images/overview/connectivity/hw_back__*.jpg), read against a
-# 10% grid overlay on the chassis silhouette:
-#
-#   0% .. 50% from the top   perforated field
-#   50% .. 80%              solid band holding the port bay
-#   80% .. 100%             perforated field again
-#
-# So the rear is perforated top AND bottom with a plain strip between them —
-# not a narrow base band. An earlier build had only the bottom band and a
-# smooth upper rear, which is the single biggest error this file had.
-#
-# The front panel is smooth silver above its base band (Apple's front diagram
-# and the straight-on product shot both confirm), so the upper field stops
-# short of the front face and tapers off around the front corners.
-Z_TOTAL = H_TOTAL
-GRILLE_H = 0.75     # height of the base band
-GRILLE_Z0 = 0.20   # band floor; GRILLE_H + GRILLE_Z0 = GRILLE_BAND_Z1
-GRILLE_PITCH = 0.22
-# Base band open area, same derivation as UPPER_HOLE_R. Apple's diagram reads
-# ~22% dark across the bottom two bands; the first pass opened
-# pi * 0.058^2 / 0.22^2 = 0.208, which measured 25% — close enough, but r
-# 0.057 at this pitch gives 0.201 and lands on the reference more closely.
-GRILLE_HOLE_R = 0.057
-GRILLE_RECESS = 0.14   # how deep the groove is cut into the shell
+def add_cylinder_between(name, a, b, r, mat, verts=20):
+    """A cylinder spanning the two points, centred on its own midpoint.
 
-# The base band, all around. Modelled directly into the body loft.
-#
-# Height is set from the reference, not from taste. Mapping the pixel diff onto
-# z (image row 0 is the top of the machine, so band 85-90% is z 0.95..1.43):
-#
-#     z 0.95..1.43   official  0% dark   solid
-#     z 0.48..0.95   official 24% dark   perforated
-#     z 0.00..0.48   official 22% dark   perforated
-#
-# So the band runs from the underside up to z 0.95, not to 1.62. The old
-# ceiling of 1.62 put holes at z 0.95..1.43 where the real part is solid and
-# measured 27% dark against a reference of 0%. Note the reference's bottom 5%
-# band still reads as perforated even though it overlaps the feet plane — the
-# band's holes start above the shell's own underside at z = FOOT_H = 0.2.
-GRILLE_BAND_Z0 = 0.20   # groove floor, just above the underside
-GRILLE_BAND_Z1 = 0.95   # groove ceiling
-GRILLE_LEVELS = 4       # extra loft levels across the band, for crisp walls
-
-# The three rear zones, as fractions of the 9.5 cm height.
-#
-# Measured from Apple's own rear hardware diagram (apple.com/hk/mac-studio/ ->
-# hw_back__*.jpg, 656x322). Sampling the dark-pixel share in 5% horizontal
-# bands across the chassis gives an unambiguous read:
-#
-#     0- 5%   0.0%   smooth
-#     5-55%  ~43%    perforated field
-#    55-70%   6%    the port band (solid, ports cut into it)
-#    70-80%  ~28%    perforated field
-#    80-90%   3%    solid transition
-#    90-100% ~22%    the base band's perforation
-#
-# So the port band sits at 55..70% from the TOP, not at the 50..80% the first
-# pass assumed, and the upper field reaches 55% rather than 50%.
-#
-# The 55..70% figure is where the dark CONNECTOR OPENINGS sit, not the extent
-# of the recess. The recess has to clear its tallest connector: the RJ45 is
-# 1.28 cm tall, and at the literal 15% (1.43 cm) that leaves 0.075 cm of
-# aluminium above and below it, which is not a machined bay, it is a slot the
-# jack is wedged into. 27..47% gives 1.90 cm, a real 0.3 cm margin top and
-# bottom, and still keeps the bay clear of both perforated fields.
-BAY_Z0 = Z_TOTAL * 0.27   # 2.57 cm
-BAY_Z1 = Z_TOTAL * 0.47   # 4.47 cm
-
-# The upper field: 5%..53% of the height from the top, stopping above the bay.
-#
-# The top bound is 5% down, not the diagram's literal 5%, because 5% of 9.5 cm
-# is 0.475 cm and the top fillet R_HORZ occupies z 9.02..9.50. Ending the field
-# at 0.95*H = 9.03 put its upper edge just inside that fillet, where the shell
-# has already curved inward — the recess then ate the outermost skin and the
-# rear panel came out 0.09 mm short in Y. 0.94 keeps a clear 0.09 cm of flat
-# metal above the field, inside the fillet's straight run.
-UPPER_Z0 = Z_TOTAL * 0.47
-UPPER_Z1 = Z_TOTAL * 0.94
-# Depth of the recessed field. The zone summary reads 31.2% dark against the
-# reference's 42.8% even though the lattice geometry opens 39.6% of the
-# surface — the holes are there but they do not go dark, because at 0.10 cm
-# the recess is shallower than the hole radius (0.071) and light rakes across
-# the far wall. Going to 0.22 overshoots the other way: the whole recessed
-# floor fell below the dark threshold and the zone read 64.1%. 0.15 cm is
-# roughly two hole radii — deep enough to shadow each opening individually,
-# shallow enough that the floor between them still catches light.
-UPPER_DEPTH = 0.15
-# The perforation fields are REAR-ONLY. The base band used to wrap all four
-# faces and the upper/lower fields used to run down both sides; on request the
-# model keeps them on the back panel alone, and the front and both sides are
-# plain aluminium from the top edge to the underside. `arc_factor` decides
-# which panel a point is on; FIELD_REAR_FADE_CM is how far the field carries
-# past the rear panel's straight edge before it reaches zero.
-FIELD_REAR_FADE_CM = 2.7
-# Front-panel standoff for the base band. It is no longer a wrap-around band,
-# so this is just the same rear-only mask's front gap.
-BASE_FRONT_GAP = 0.34
-UPPER_LEVELS = 5         # loft levels across the field
-# Hole size is set from the OPEN AREA, not by eye. A pixel diff against
-# Apple's rear diagram puts the perforated field at 42-45% dark pixels per
-# band; the first pass read 20-29% because the lattice only opened 21% of the
-# surface (pi * 0.052^2 / 0.20^2 = 0.212). These numbers open 41%:
-#   pitch 0.20, r 0.071  ->  pi * 0.005041 / 0.0400 = 0.396
-# The 0.20 pitch keeps a 0.058 cm web between holes, which is what the real
-# part shows — the perforations are separated by metal, not merged into slots.
-UPPER_PITCH = 0.20
-UPPER_HOLE_R = 0.071
-
-# The lower field: 70%..80% from the top, between the port band and the base.
-LOWER_F_Z0 = Z_TOTAL * 0.20
-LOWER_F_Z1 = Z_TOTAL * 0.30
-LOWER_F_DEPTH = 0.10
-LOWER_F_LEVELS = 3
-
-
-def grille_inset(z, front_factor=1.0):
-    """Extra profile inset at height `z` — the three ventilation recesses.
-
-    * base band   z 0.42..1.62 — wraps the whole perimeter
-    * upper field z 50%..93% of height — rear and sides only
-    * lower field z 18%..34% of height — rear and sides only, below the ports
-
-    `front_factor` scales the inset on the front face: 1.0 keeps the front's
-    base band, 0.0 leaves the front completely smooth. The two rear fields pass
-    through 0 there, so the front panel stays solid silver all the way up.
-
-    Steps rather than ramps: the real part has a flat groove floor and a sharp
-    edge, not a chamfer.
+    The rotation is given to the primitive so it is applied about the part's
+    own centre; assigning `rotation_euler` after the fact would orbit the
+    already-baked world-space mesh around the world origin instead.
     """
-    if GRILLE_BAND_Z0 - 1e-6 <= z <= GRILLE_BAND_Z1 + 1e-6:
-        return GRILLE_RECESS * front_factor
-    if UPPER_Z0 - 1e-6 <= z <= UPPER_Z1 + 1e-6:
-        return UPPER_DEPTH * front_factor
-    if LOWER_F_Z0 - 1e-6 <= z <= LOWER_F_Z1 + 1e-6:
-        return LOWER_F_DEPTH * front_factor
-    return 0.0
+    a, b = Vector(a), Vector(b)
+    d = b - a
+    mid = (a + b) / 2.0
+    rot = d.to_track_quat("Z", "Y").to_euler()
+    return add_cylinder(name, mid.x, mid.y, mid.z, r, d.length, mat,
+                        verts=verts, rot=rot)
 
 
+def add_tube(name, cx, cy, cz, r_out, r_in, h, mat, verts=40, axis="Z"):
+    """A hollow cylinder — the shape a fan shroud or a speaker cone wants."""
+    verts_l, faces = [], []
+    for rr in (r_out, r_in):
+        for z in (-h / 2.0, h / 2.0):
+            for k in range(verts):
+                a = 2 * math.pi * k / verts
+                verts_l.append((cx + rr * math.cos(a), cy + rr * math.sin(a), cz + z))
+    bo, to, bi, ti = 0, verts, 2 * verts, 3 * verts
+    for k in range(verts):
+        k2 = (k + 1) % verts
+        faces.append((bo + k, bo + k2, to + k2, to + k))        # outer wall
+        faces.append((bi + k2, bi + k, ti + k, ti + k2))        # inner wall
+        faces.append((bo + k2, bo + k, bi + k, bi + k2))        # bottom ring
+        faces.append((to + k, to + k2, ti + k2, ti + k))        # top ring
+    obj = simple_mesh(name, verts_l, faces, mat, smooth=True)
+    if axis == "Y":
+        obj.rotation_euler = (math.pi / 2, 0, 0)
+        bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    return obj
+
+
+# ------------------------------------------------------- perforated fields
 def build_grille_field(mats, name, z_lo, z_hi, depth, pitch, hole_r,
-                       front_factor, seg=8, rows_cap=40):
-    """Punch a lattice of hole tubes into a recessed field, radially outward.
+                       mask_fn, seg=8, row_pitch=None, stagger=0.0,
+                       max_holes=40000, hole_rz=None):
+    """Punch a lattice of round hole tubes into a recessed field.
 
-    Shared by the base band (which wraps the whole perimeter) and the upper
-    rear/side field (which stops short of the front). `front_factor(py)` scales
-    how much of the field exists at a given point around the profile, so the
-    same path walk serves both the full wrap and the partial one.
+    Tubes start on the groove floor and run OUTWARD to the original skin: a tube
+    that stops short leaves a lip of skin in front of every hole, and one that
+    overshoots pokes past the shell and inflates the bounding box.
 
-    Tubes start on the groove floor and run OUTWARD to the original skin: a
-    tube that stops short leaves a lip of skin in front of every hole, and one
-    that overshoots pokes past the shell and inflates the bounding box.
+    The path is the profile at the GROOVE FLOOR, taken from the body's own
+    rounded_rect so the two cannot drift.
+
+    Column pitch and row pitch are separate, and the stagger is a FRACTION of
+    the column pitch rather than a half-pitch offset. The measured lattices are
+    neither square nor half-staggered: the rear field's rows sit 16% further
+    apart than its columns and each alternate row is offset by a fifth of the
+    pitch, while the base band is a plain square grid. A single `pitch` used
+    for both axes, with a hard-coded half-pitch offset, drifts visibly across a
+    171 mm field even though it looks right over the first few centimetres.
     """
-    ring = [
-        (math.cos(2 * math.pi * k / seg), math.sin(2 * math.pi * k / seg))
-        for k in range(seg)
-    ]
+    row_pitch = pitch if row_pitch is None else row_pitch
+    if hole_rz is None or abs(hole_rz - hole_r) < 1e-9:
+        ring = [(math.cos(2 * math.pi * k / seg), math.sin(2 * math.pi * k / seg))
+                for k in range(seg)]
+    else:
+        # obround: a rounded rectangle whose corner radius is the half-height,
+        # so the long sides come out flat and the ends semicircular - which is
+        # what the photograph shows, and an ellipse only approximates it
+        ring = rounded_rect(max(hole_r - hole_rz, 1e-4), hole_rz, hole_rz,
+                            seg=max(3, seg // 2), edge_sub=1)
+    nring = len(ring)
 
-    # The path is the profile at the GROOVE FLOOR, taken from the body's own
-    # rounded_rect so the two can never drift. Corner arc centres there are
-    # inset by the radius (a corner at half-extent hx with radius r is centred
-    # at (hx - r, 0), not (hx, 0)); using the edge midpoint pushes the path
-    # outward by r and inflates the bbox by exactly that much.
     hx, hy = W / 2.0 - depth, D / 2.0 - depth
-    r = R_VERT - depth
-    perim = rounded_rect(hx, hy, r, seg=24, edge_sub=96)
+    perim = rounded_rect(hx, hy, R_VERT - depth, seg=24, edge_sub=160)
     acc = [0.0]
     for i in range(1, len(perim)):
         ax, ay = perim[i - 1]
@@ -547,479 +560,650 @@ def build_grille_field(mats, name, z_lo, z_hi, depth, pitch, hole_r,
         ln = math.hypot(dx, dy) or 1.0
         return px, py, dx / ln, dy / ln
 
-    # Rows are spaced on the SAME pitch as the columns, not stretched to fit.
-    #
-    # This used to be
-    #     rows = clamp(int((z_hi - z_lo) / (pitch * 0.86)))
-    #     row_dz = (z_hi - z_lo) / (rows - 1)
-    # which distributes `rows` rows evenly across the band whatever that
-    # comes to, so the row pitch drifted away from the column pitch. At
-    # pitch 0.20 the field came out on a 0.175 cm row pitch, and the pixel
-    # diff against Apple's rear diagram came back alternating — 40%, 29%,
-    # 41%, 29% down the field — because some bands caught a hole row edge-on
-    # and some caught the gap between two of them.
-    #
-    # On a square lattice the band gets floor(span / pitch) rows, spaced
-    # exactly `pitch` apart, with the remainder left as solid metal at the
-    # bottom rather than smeared across the whole field.
     span = z_hi - z_lo
-    rows = max(1, min(rows_cap, int(span / pitch) + 1))
-    row_dz = pitch
+    rows = max(1, int(span / row_pitch) + 2)
+    row_dz = row_pitch
 
     verts, faces = [], []
     placed = 0
     for row in range(rows):
-        # Rows run from the TOP of the band down to the bottom, evenly.
-        #
-        # This used to be
-        #     z0 = z_lo + (z_hi - z_lo) / 2.0 - row * row_dz
-        # which anchors the first row at the band's MIDPOINT and then walks
-        # down, so the upper half of the field was never built: the upper
-        # rear field spans z 4.47..8.93 but only 4.47..6.70 got holes, and a
-        # pixel diff against Apple's rear diagram showed the perforated band
-        # starting at 25% of the height instead of 5%.
-        z0 = z_hi - row * row_dz
-        s = (pitch / 2.0) if row % 2 else 0.0
+        z0 = z_lo + span - row * row_dz
+        s = (stagger * pitch) if (stagger and row % 2) else 0.0
         while s < total:
             px, py, tx, ty = point_at(s)
-            # Keyed on the point's own position, not on `py` alone and not on a
-            # precomputed arc — see arc_factor for why both of those put the
-            # holes on the side panels instead of the back.
-            ff = front_factor(px, py, hx, hy)
-            # Cut the field off well before the mask reaches zero, so the
-            # corner arc carries no holes.
-            if ff < 0.5:
+            if mask_fn(px, py, hx, hy) < 0.5:
                 s += pitch
-                continue          # outside this field's arc
-            rx, ry = -ty, tx                 # outward normal
+                continue
+            if placed >= max_holes:
+                break
+            rx, ry = -ty, tx                       # outward normal
             base = len(verts)
-            for oz in (0.0, depth):
+            # A hole is a tube along the NORMAL. Its cross-section lives in
+            # the (tangent, up) plane, and the four rings differ ONLY in how
+            # far they are pushed back along the normal:
+            #
+            #   ring 0,1  the mouth, ON the recessed floor
+            #   ring 2,3  the same mouth, `depth` further in, closing the tube
+            #
+            # The ring's first coordinate is scaled by hole_r (across) and its
+            # second by rz (up the panel) — those are the hole's own axes, not
+            # the tube's length. Getting that wrong is the bug that put every
+            # hole 0.71 mm proud: a first version applied the ring's first
+            # axis on the NORMAL and the second on the tangent, so each "hole"
+            # was a flat ring lying tangentially and extruded vertically.
+            # A second version then reused the ring's vertical offset as the
+            # tube's length, which extruded the tube `depth` TALL and filled
+            # the whole perforated field with black geometry.
+            rz = hole_r if hole_rz is None else hole_rz
+            for od in (-depth, 0.0, -depth, 0.0):
                 for ox, oy in ring:
-                    verts.append((px + rx * (ox * hole_r) + tx * (oy * hole_r),
-                                  py + ry * (ox * hole_r) + ty * (oy * hole_r),
-                                  z0 + oz))
-            for k in range(seg):
-                k2 = (k + 1) % seg
+                    verts.append((px + tx * (ox * hole_r) + rx * od,
+                                  py + ty * (ox * hole_r) + ry * od,
+                                  z0 + oy * rz))
+            for k in range(nring):
+                k2 = (k + 1) % nring
+                # groove-floor ring -> skin ring (the visible wall)
                 faces.append((base + k, base + k2,
-                              base + seg + k2, base + seg + k))
-                faces.append((base + 2 * seg + k2, base + 2 * seg + k,
-                              base + 3 * seg + k, base + 3 * seg + k2))
-            for k in range(seg):
-                k2 = (k + 1) % seg
-                faces.append((base + k2, base + k,
-                              base + 2 * seg + k, base + 2 * seg + k2))
-                faces.append((base + seg + k, base + seg + k2,
-                              base + 3 * seg + k2, base + 3 * seg + k))
+                              base + nring + k2, base + nring + k))
+                # back ring -> groove-floor ring (the closing cap)
+                faces.append((base + 2 * nring + k2, base + 2 * nring + k,
+                              base + k, base + k2))
+                # skin ring -> back ring (the inner wall)
+                faces.append((base + nring + k, base + nring + k2,
+                              base + 3 * nring + k2, base + 3 * nring + k))
+                # back ring -> skin ring (the outer rim)
+                faces.append((base + 3 * nring + k2, base + 3 * nring + k,
+                              base + 2 * nring + k, base + 2 * nring + k2))
             placed += 1
             s += pitch
 
     obj = simple_mesh(name, verts, faces, mats["grille"], smooth=True)
-    print("  %s: %d holes in %d rows" % (name, placed, rows))
+    print("  %s: %d holes, %d rows, pitch %.3f cm, hole %.3f x %.3f cm"
+          % (name, placed, rows, pitch, hole_r,
+             hole_r if hole_rz is None else hole_rz))
     return obj
 
 
-def arc_factor(px, py, half_x, half_y, gap_cm, rear_fade_cm,
-               in_base=False):
-    """Perimeter mask: 1.0 on the rear panel, 0.0 everywhere else.
-
-    Keyed on GEOMETRY, not on arc length and not on a single axis. A single axis
-    cannot work: on a rounded square the rear panel and each side panel span the
-    same range of the other axis, so `py` is identical across a side panel and
-    the middle of the back, and a py-keyed mask lights up the sides while leaving
-    the back bare. Arc length does separate them, but only if the arc is
-    rescaled from the inset profile onto the reference one — and getting that
-    wrong by half a centimetre slides the field onto the side panels, which is
-    exactly what happened.
-
-    So this asks the direct question: is this point on the rear panel? That is
-    `py` out near `half_y` and `px` inside the rear panel's width, with a
-    smoothstep ramp down the corner arc to zero before the side panel begins.
-    Both the recess in the body loft and the hole placement call this, so the
-    two cannot drift — if they did, the recess would be shallower than the hole
-    tubes and every hole would end up buried inside solid aluminium, which is
-    invisible from outside and survived several builds before it was caught by
-    a ray grid.
-
-    `half_x`/`half_y` are the profile's own half-extents, so the same call works
-    on the body loft and on the inset profile the hole tubes are laid along.
-    """
-    if half_y <= 0.0:
-        return 0.0
-    # Only the REAR half of the outline can carry the field. Testing `px > flat`
-    # alone is not enough: the front corners sit at the same |px| as the rear
-    # ones, so they passed the corner test and came back with a full-depth mask
-    # — 96 vertices' worth of grille on the front panel, at x +8.73..8.87.
-    if py <= 0.0:
-        return 1.0 if in_base else 0.0
-
-    # how far in from the rear face, as a fraction of the depth available
-    t = (half_y - py) / (2.0 * half_y)          # 0 at the rear face, 0.5 at a side
-    # the rear panel's straight width, less the corner radius
-    flat = max(0.0, half_x - R_VERT)
-    if px > flat:
-        u = (px - flat) / max(1e-6, R_VERT)     # 0 at the corner start, 1 past it
-        u = 1.0 if u > 1.0 else u
-        t = 0.5 * u                              # blend into the side panel
-    if t <= 0.0:
-        return 1.0
-    # ramp out over the corner; rear_fade_cm is in cm of arc, which the corner
-    # arc is, so convert through the radius
-    span = rear_fade_cm / max(1e-6, (2.0 * half_y))
-    if t >= span:
-        return 1.0 if in_base else 0.0
-    v = 1.0 - t / span
-    return v * v * (3.0 - 2.0 * v)
-
-
-def build_grille_band(mats, body):
-    """Both ventilation fields: the base band and the upper rear/side field.
-
-    Neither is a boolean. Both recesses come from the body loft (see
-    `grille_inset`), and the hole tubes are laid into them from the groove
-    floor outward to the original skin. Booleans on this shape failed three
-    ways in a row — tangent cutter, buried cutter, proud cutter — and two of
-    those are silent.
-
-    The fields differ only in span, depth and how far around the perimeter
-    they reach, which is what `build_grille_field` takes as arguments:
-
-    * base band   — z 0.42..1.62, the whole perimeter, 0.14 cm deep
-    * upper field — z 50%..93% of height, rear and sides only, leaving the
-      front panel solid silver above the band
-    * lower field — z 18%..34% of height, rear and sides only, below the ports
-    """
-    # All three fields share the same rear-only perimeter mask. The base band
-    # used to pass a constant 1.0 here, which is what put its holes on all four
-    # faces including the front panel.
-    def rear_only(px, py, half_x, half_y):
-        return arc_factor(px, py, half_x, half_y, BASE_FRONT_GAP,
-                          FIELD_REAR_FADE_CM)
-
+def build_grilles(mats):
+    """The two ventilation features: the wrap-around base band and the single
+    large rear field."""
     band = build_grille_field(
-        mats, "BottomGrille",
-        GRILLE_BAND_Z0 + 0.06, GRILLE_BAND_Z1 - 0.06,
-        GRILLE_RECESS, GRILLE_PITCH, GRILLE_HOLE_R,
-        front_factor=rear_only, seg=8, rows_cap=8)
+        mats, "BaseGrille",
+        GRILLE_BAND_Z0 + 0.055, GRILLE_BAND_Z1 - 0.055,
+        GRILLE_RECESS, GRILLE_PITCH_X, GRILLE_HOLE_RX,
+        mask_fn=base_mask, seg=8, row_pitch=GRILLE_PITCH_Z,
+        stagger=GRILLE_STAGGER, hole_rz=GRILLE_HOLE_RZ)
 
-    upper = build_grille_field(
-        mats, "UpperGrille",
-        UPPER_Z0 + 0.12, UPPER_Z1 - 0.12,
-        UPPER_DEPTH, UPPER_PITCH, UPPER_HOLE_R,
-        front_factor=rear_only, seg=8, rows_cap=40)
-
-    lower = build_grille_field(
-        mats, "LowerRearGrille",
-        LOWER_F_Z0 + 0.10, LOWER_F_Z1 - 0.10,
-        LOWER_F_DEPTH, UPPER_PITCH, UPPER_HOLE_R,
-        front_factor=rear_only, seg=8, rows_cap=8)
-    return band, upper, lower
+    field = build_grille_field(
+        mats, "RearField",
+        UPPER_Z0 + 0.10, UPPER_Z1 - 0.10,
+        UPPER_DEPTH, UPPER_PITCH_X, UPPER_HOLE_R,
+        mask_fn=field_mask, seg=10, row_pitch=UPPER_PITCH_Z,
+        stagger=UPPER_STAGGER)
+    return band, field
 
 
-def rounded_rect_path(hx, hy, r, steps=720):
-    """Sample a rounded rectangle. Corner arc centres are inset by r."""
-    pts = []
-    corners = ((hx - r, hy - r, 0.00), (-hx + r, hy - r, 0.25),
-               (-hx + r, -hy + r, 0.50), (hx - r, -hy + r, 0.75))
-    for i in range(steps):
-        t = (i / steps) * 4.0
-        e = int(t)
-        u = t - e
-        a, b = corners[e], corners[(e + 1) % 4]
-        p0 = (a[0] + r * math.cos(2 * math.pi * a[2]),
-              a[1] + r * math.sin(2 * math.pi * a[2]))
-        p1 = (b[0] + r * math.cos(2 * math.pi * b[2]),
-              b[1] + r * math.sin(2 * math.pi * b[2]))
-        pts.append((p0[0] + (p1[0] - p0[0]) * u, p0[1] + (p1[1] - p0[1]) * u))
-    return pts
-
-
-def build_band_panel(mats, perim, z_lo, z_hi, mat, proud=0.0):
-    """Closed ring prism wrapping the perimeter between two heights.
-
-    Used as a boolean cutter for the grille groove, so it has to be a real
-    watertight solid: sample the path densely and cap nothing (a ring prism is
-    already closed if the path is closed). Sampling every 8th point leaves the
-    faces so thin that EXACT treats the cutter as degenerate and the boolean
-    silently no-ops — the groove stays uncut and the bounding box still
-    verifies, so nothing else catches it.
-
-    `proud` offsets the ring radially: negative values push it inboard, which
-    is what cuts a recess rather than adding a shell of new geometry.
-    """
-    ring = list(perim)
-    # A ring prism with no top/bottom caps is an open surface, and EXACT
-    # silently no-ops on open cutters. Build all four rings — outer bottom,
-    # outer top, inner bottom, inner top — and cap the ends so the solid is
-    # watertight before handing it to the boolean.
-    m = len(ring)
-    verts, faces = [], []
-
-    def add_ring(z, offset):
-        base = len(verts)
-        for px, py in ring:
-            n = math.hypot(px, py) or 1.0
-            verts.append((px + px / n * offset, py + py / n * offset, z))
-        return base
-
-    ob = add_ring(z_lo, proud)      # outer, bottom
-    ot = add_ring(z_hi, proud)      # outer, top
-    ib = add_ring(z_lo, 0.0)        # inner (on the path), bottom
-    it = add_ring(z_hi, 0.0)        # inner, top
-    for i in range(m):
-        j = (i + 1) % m
-        faces.append((ob + i, ob + j, ot + j, ot + i))   # outer wall
-        faces.append((ib + j, ib + i, it + i, it + j))   # inner wall
-        faces.append((ib + i, ib + j, ob + j, ob + i))   # bottom cap
-        faces.append((ot + i, ot + j, it + j, it + i))   # top cap
-    return simple_mesh("BandPanel_%.2f" % z_lo, verts, faces, mat, smooth=True)
-
-
+# ------------------------------------------------------------------- sockets
 def add_socket(name, x, z, w, h, y_mouth, mats, depth=0.30, wall=0.05, inward=1.0):
-    """A rectangular connector socket: 4 bright metal walls + dark back + tongue.
+    """A rectangular connector socket: bright metal walls, dark back, tongue.
 
-    Built wall-by-wall rather than as one solid dark box. That is what makes a
-    connector read as a real socket in a render — you see the lit inner walls
-    and the shadowed back plate, instead of a flat black silhouette. A solid
-    box at any lighting reads as a painted-on cutout.
+    Built wall-by-wall rather than as one dark box — that is what makes a
+    connector read as a socket instead of a painted-on cutout.
 
-    `y_mouth` is the plane the opening sits on. `inward` is +1 when the socket
-    body extends toward +Y (rear panel, which is at +D/2) and -1 when it
-    extends toward -Y (front panel, at -D/2). Getting this backwards builds
-    the socket outside the enclosure and inflates the bounding box.
+    `inward` is +1 when the body extends toward +Y and -1 when it extends
+    toward -Y. Getting this backwards builds the socket outside the enclosure
+    and inflates the bounding box.
     """
     shell, cav = mats["alu"], mats["cavity"]
-    # yc is the socket's mid-depth, measured from the mouth plane toward the
-    # interior. y_mouth is already set *behind* the skin by the caller, so the
-    # body spans y_mouth .. y_mouth + inward*depth and never crosses the skin.
     yc = y_mouth + inward * depth / 2.0
-    add_box(name + "_w_top", x, yc, z + h / 2 - wall / 2, w, depth, wall, shell)
-    add_box(name + "_w_bot", x, yc, z - h / 2 + wall / 2, w, depth, wall, shell)
-    add_box(name + "_w_l", x - w / 2 + wall / 2, yc, z, wall, depth, h - 2 * wall, shell)
-    add_box(name + "_w_r", x + w / 2 - wall / 2, yc, z, wall, depth, h - 2 * wall, shell)
-    add_box(name + "_back", x, y_mouth + inward * (depth - 0.03), z, w, 0.05, h, cav)
-    add_box(name + "_tongue", x, y_mouth + inward * depth * 0.55, z, w * 0.58, 0.09,
+    add_box(name + "_wt", x, yc, z + h / 2 - wall / 2, w, depth, wall, shell)
+    add_box(name + "_wb", x, yc, z - h / 2 + wall / 2, w, depth, wall, shell)
+    add_box(name + "_wl", x - w / 2 + wall / 2, yc, z, wall, depth, h - 2 * wall, shell)
+    add_box(name + "_wr", x + w / 2 - wall / 2, yc, z, wall, depth, h - 2 * wall, shell)
+    add_box(name + "_bk", x, y_mouth + inward * (depth - 0.03), z, w, 0.05, h, cav)
+    add_box(name + "_tg", x, y_mouth + inward * depth * 0.55, z, w * 0.58, 0.09,
             h * 0.34, shell, bevel=0.02)
 
 
 def add_round_socket(name, x, z, r, y_mouth, mats, depth=0.30, inward=1.0):
-    """Same idea for a round jack: bright metal tube, dark back disc, centre pin."""
     shell, cav = mats["alu"], mats["cavity"]
     yc = y_mouth + inward * depth / 2.0
-    add_cylinder(name + "_shell", x, yc, z, r, depth, shell, verts=40, axis="Y")
-    add_cylinder(name + "_back", x, y_mouth + inward * (depth - 0.04), z, r * 0.88,
+    add_cylinder(name + "_sh", x, yc, z, r, depth, shell, verts=40, axis="Y")
+    add_cylinder(name + "_bk", x, y_mouth + inward * (depth - 0.04), z, r * 0.88,
                  0.05, cav, verts=40, axis="Y")
-    add_cylinder(name + "_pin", x, y_mouth + inward * depth * 0.62, z, r * 0.16,
+    add_cylinder(name + "_pn", x, y_mouth + inward * depth * 0.62, z, r * 0.16,
                  0.14, shell, verts=16, axis="Y")
 
 
-# ------------------------------------------------------------------- I/O layout
-def build_rear_io(mats):
-    """Rear bay is a real recess (boolean); the connectors sit inside it."""
-    y_face = D / 2.0
-    # Port bay geometry, from Apple's rear diagram. The solid band runs
-    # 55%..70% down from the top, so its height is 15% of the 9.5 cm chassis
-    # (1.43 cm). The earlier bay was 4.1 cm tall — 43% — and 17.4 cm wide, so
-    # it covered almost the whole rear panel and swallowed both perforated
-    # fields. Its top edge also sat ABOVE the upper field's floor, so the
-    # boolean removed that field outright.
-    bay_x = 7.60
-    bay_z0, bay_z1 = BAY_Z0, BAY_Z1
-    # 0.18 cm, not 0.42. A 15.2 x 1.9 cm panel does not have a 4 mm deep
-    # pocket in it — that is a slot, and it renders as a black bar. The real
-    # bay is a shallow step so the connector collars stand slightly proud.
-    bay_depth = 0.18
-    zc = (bay_z0 + bay_z1) / 2.0
-    body = bpy.data.objects["Body"]
+def cloverleaf_outline(lobes=3, lobe_r=0.42, offset=0.52, samples=180):
+    """Radial outline of the IEC C8 "cloverleaf" AC inlet.
 
-    # The cutter must straddle the skin: its outer face stays OUTSIDE the rear
-    # panel (that part is simply discarded) and its inner face reaches exactly
-    # bay_depth inside. Overshooting the footprint makes EXACT merge the
-    # cutter's outer half into the shell and grow the bbox.
-    cut_from_body(body, "RearBay", 0.0, y_face + 0.10 - bay_depth / 2.0, zc,
-                  bay_x * 2.0, bay_depth + 0.20, bay_z1 - bay_z0,
-                  bevel=0.35, mats=mats)
-    # The bay floor is ALUMINIUM, not black.
-    #
-    # The first pass painted the whole recess Cavity_Black, which was the wrong
-    # reading of "the port bay should not look silver": against Apple's rear
-    # diagram the band at 55-70% of the height reads 6% / 0% / 9% dark, i.e.
-    # solid metal, and painting it black put the model at 74% / 59% / 66% — the
-    # bay became a black slot.
-    #
-    # The bay is a machined step in one piece of aluminium, so its floor AND
-    # its walls are aluminium. A boolean difference leaves the walls carrying
-    # Cavity_Black (the cutter's material), which is what kept 68 faces dark
-    # after the depth came down from 0.42 to 0.18 cm. Repaint the whole recess
-    # back to the shell material: the only dark geometry in the band should be
-    # the connector mouths, and those are separate objects.
-    body_mat = bpy.data.materials["Aluminium_Silver"]
-    slot_alu = [i for i, m in enumerate(body.data.materials)
-                if m == body_mat]
-    alu_slot = slot_alu[0] if slot_alu else 0
-    y_lo = y_face - bay_depth - 0.02
-    y_hi = y_face - 0.02
-    repainted = 0
-    for p in body.data.polygons:
-        c = p.center
-        if (y_lo < c.y < y_hi and abs(c.x) < bay_x + 0.6
-                and bay_z0 - 0.10 < c.z < bay_z1 + 0.10
-                and p.material_index != alu_slot):
-            p.material_index = alu_slot
-            repainted += 1
-    print("  RearBay: %d faces repainted to aluminium" % repainted)
-
-    # Rear port order, from Apple's own rear hardware diagram
-    # (/v/mac-studio/o/images/overview/connectivity/hw_back__*.jpg), read
-    # left-to-right as shown in that image:
-    #
-    #   4x USB-C (USB 3.2 Gen 2, 10 Gb/s) | 10GbE | AC power inlet
-    #   | 2x Thunderbolt 5 | HDMI | 3.5 mm headphone | power button
-    #
-    # The earlier build had four THUNDERBOLT ports grouped on the left and no
-    # power button at all. Apple's diagram shows only TWO Thunderbolt 5 ports,
-    # and the four leftmost are plain 10 Gb/s USB-C.
-    #
-    # That diagram is a straight-on REAR view, which in this model is the +Y
-    # side, so its left-to-right is the NEGATIVE of our +X. Mirror the x values.
-    # The connector mouths sit just outside the bay floor: the floor is at
-    # y_face - bay_depth = 9.67, and a USB-C shell stands 0.10 cm proud of
-    # the outer skin, so its mouth is at 9.75.
-    y_mouth = y_face - 0.10
-    # x positions are MODEL space, mirrored from the diagram's visual order.
-    # The bay is 15.2 cm wide, so keep everything within +/- 7.4.
-    #
-    # USB-C and Thunderbolt shells are TALLER THAN WIDE on the real part — the
-    # opening is a vertical rounded slot about 0.38 x 0.90 cm, not a wide letter
-    # slot. The earlier build had them 0.92 wide x 0.30 high, which reads as a
-    # horizontal slot and is wrong in both axes.
-    #
-    # Spacing is set by verify_ports.py, which fails the build if any two
-    # connectors are closer than 0.20 cm. HDMI (1.50 wide) and the 3.5 mm jack
-    # (0.52 across) sat 0.14 cm apart at the old positions, which reads as the
-    # two openings touching.
-    parts = [
-        # (name, x, width, height) — USB-C and TB5 are vertical slots
-        ("USBC_1", 6.30, 0.38, 0.90),
-        ("USBC_2", 5.15, 0.38, 0.90),
-        ("USBC_3", 4.00, 0.38, 0.90),
-        ("USBC_4", 2.85, 0.38, 0.90),
-        ("RJ45", 1.05, 1.45, 1.28),
-        ("PowerInlet", -1.25, 1.05, 0.60),
-        ("TB5_1", -3.05, 0.38, 0.90),
-        ("TB5_2", -4.20, 0.38, 0.90),
-        ("HDMI", -5.75, 1.50, 0.46),
-    ]
-    for name, x, w, h in parts:
-        add_socket("Port_" + name, x, zc, w, h, y_mouth, mats, inward=-1.0)
-    # 3.5 mm jack at the bay's far end, clear of the HDMI's right edge
-    add_round_socket("Port_Headphone", -7.10, zc, 0.26, y_mouth, mats, inward=-1.0)
-
-    # Touch ID power button, at the far end of the bay in Apple's diagram,
-    # vertically centred like the rest of the row (it sat above the port line
-    # before, hanging outside the bay band).
-    pw = add_cylinder("Port_PowerButton", 7.05, y_mouth - 0.06, zc,
-                      0.22, 0.10, mats["alu"], verts=32, axis="Y")
-    return pw
-
-
-def build_front_io(mats, body):
-    """Front: 2x USB-C + SDXC on the left, 3.5 mm jack on the right.
-
-    Each opening is booleaned into the shell so it reads as a real slot with
-    an inner shadow, not a black sticker on the skin. A bright chamfer ring
-    around each opening is what actually sells the depth: without a specular
-    edge catching light, a recessed hole reads flat in a studio render.
-
-    Positions are measured, not guessed. From Apple's own front hardware
-    diagram (apple.com/hk/mac-studio/ -> hw_front__*.jpg, 656x322), the feature
-    centres sit at 16.5%, 24.0%, 37.7% and 83.5% of the panel width, read
-    left-to-right in that image. The diagram shows the machine from in front,
-    which is the -Y side here, so image-left is model +X and each position maps
-    to x = W/2 - (pct/100)*W. That puts them at +6.60, +5.12, +2.42 and -6.60.
-
-    The right-hand round feature is the 3.5 mm headphone jack, NOT a status
-    light. The earlier build modelled it as an emissive LED at x = -7.60, which
-    is both the wrong function and 1.0 cm too far out.
+    Union of one central disc and `lobes` discs on a ring. Sampled as a radius
+    per angle, which is exact here because the shape is star-shaped about its
+    centre. An earlier build cut a 1.05 x 0.60 cm rectangle instead, on a part
+    that measures 22.0 x 16.4 mm.
     """
-    y_face = -D / 2.0
-    zc = 2.55
-    slots = [
-        # USB-C openings on the real part are vertical rounded slots, roughly
-        # 0.36 wide x 0.90 tall — the same shell as the rear Thunderbolt ports.
-        # The earlier build used 0.32 x 0.90 for the front (correct) but the
-        # rear row was the transposed 0.92 x 0.30, so the two disagreed.
-        ("Front_USBC_1", 6.60, 0.36, 0.90),
-        ("Front_USBC_2", 5.12, 0.36, 0.90),
-        # SD slot spans 31%..44% of the panel width -> x +1.18..+3.74
-        ("Front_SDXC", 2.42, 1.30, 0.34),
-    ]
-    for name, x, w, h in slots:
-        # Straddling convention: outer face 0.10cm proud of the skin, inner
-        # face 0.50cm in. The bevel is deliberately small — a large bevel on a
-        # 0.60cm-deep cutter rounds away the part that overlaps the skin and
-        # EXACT then merges the cutter's outer cap into the shell, growing the
-        # bbox by the cutter's overhang instead of shrinking it.
-        cut_from_body(body, name, x, y_face + 0.20, zc, w + 0.20, 0.60, h + 0.20,
-                      bevel=0.06, mats=mats)
-        # same flipped-skin problem as the rear bay: the slot's back wall is the
-        # original skin turned inward, and it keeps the aluminium material
-        paint_recess_black(body, y_face + 0.02, y_face + 0.55,
-                           abs(x) + w / 2.0 + 0.12, zc - h / 2.0 - 0.12,
-                           zc + h / 2.0 + 0.12)
-        # The socket sits behind the skin opening. y_face is the outer skin at
-        # -D/2, so "behind the skin" is larger y: inward=+1. (The rear panel
-        # is at +D/2, where "behind" is smaller y: inward=-1.)
-        add_socket(name, x, zc, w, h, y_face + 0.10, mats, depth=0.34, wall=0.045,
-                   inward=1.0)
+    pts = []
+    for i in range(samples):
+        a = 2 * math.pi * i / samples
+        ux, uy = math.cos(a), math.sin(a)
+        best = lobe_r
+        for k in range(lobes):
+            ka = 2 * math.pi * k / lobes + math.pi / 2.0
+            cx, cy = offset * math.cos(ka), offset * math.sin(ka)
+            d = cx * ux + cy * uy
+            disc = lobe_r ** 2 - (offset ** 2 - d * d)
+            if disc > 0.0:
+                best = max(best, d + math.sqrt(disc))
+        pts.append((best * ux, best * uy))
+    return pts
 
-    # 3.5 mm headphone jack on the right, at 83.5% of the panel width.
+
+def add_ac_inlet(name, x, z, w, h, y_face, body, mats, depth=0.42, inward=1.0):
+    """Cut and build the three-lobed mains inlet.
+
+    `inward` is the direction the socket body runs away from the face, in
+    the model's +Y/-Y sense. Every depth below is written as `y_face +
+    inward * d` rather than `y_face - d`: hardcoding the sign put the whole
+    inlet 4.5 mm OUTSIDE the rear panel once y_face became negative, and
+    the pins stuck out to y = -103 mm against a -98.5 mm skin.
+    """
+    def y_at(d):
+        return y_face + inward * d
+
+    outline = cloverleaf_outline(
+        lobe_r=h * 0.30, offset=w * 0.30)
+    n = len(outline)
+    verts, faces = [], []
+    for y in (y_at(-0.10), y_at(depth)):
+        for ox, oz in outline:
+            verts.append((x + ox, y, z + oz))
+    for k in range(n):
+        k2 = (k + 1) % n
+        faces.append((k, k2, n + k2, n + k))       # side wall
+    faces.append(tuple(range(n - 1, -1, -1)))     # outer cap (discarded)
+    faces.append(tuple(range(n, 2 * n)))          # inner cap -> inlet floor
+    cutter = simple_mesh("_cut_" + name, verts, faces, mats["cavity"])
+    boolean_diff(body, cutter, "Cut_" + name)
+
+    # The inlet body: a dark shroud set back inside the opening, with three
+    # bright pins in a triangle and a dark centre earth pin.
+    yc = y_at(depth * 0.55)
+    add_cylinder(name + "_shroud", x, yc, z, w * 0.30, depth * 0.7,
+                 mats["cavity"], verts=40, axis="Y")
+    for k in range(3):
+        a = 2 * math.pi * k / 3.0 + math.pi / 2.0
+        px = x + offset_of(w) * math.cos(a)
+        pz = z + offset_of(w) * math.sin(a)
+        add_cylinder(name + "_pin%d" % k, px, y_at(depth * 0.72), pz, 0.105,
+                     0.30, mats["alu"], verts=20, axis="Y")
+    add_cylinder(name + "_earth", x, y_at(depth * 0.80), z, 0.115, 0.24,
+                 mats["alu"], verts=20, axis="Y")
+
+
+def offset_of(w):
+    return w * 0.30
+
+
+# ---------------------------------------------------------------- rear panel
+def build_rear_io(mats, body):
+    """Rear connectors, cut into the panel at the measured positions.
+
+    The rear panel is at +Y. A rear view puts model +X on the image's LEFT, so
+    the measured image-x maps through x = W/2 - x_img; REAR_PORTS is already in
+    model space.
+
+    The connectors sit FLUSH in the panel — there is no milled bay. The real
+    rear is one flat aluminium face with the connectors let into it and a row of
+    engraved icons above. The previous build cut a 15.2 x 1.9 cm pocket across
+    the middle of the panel, which does not exist on this machine.
+    """
+    # The rear panel is at y = -D/2. This used to read D/2, which built the
+    # entire I/O row - AC inlet, six Thunderbolt, HDMI, Ethernet, two USB-A,
+    # the headphone jack, the power button and the engraved icons - on the
+    # FRONT face, above the two USB-C and the SDXC slot. The machine then had
+    # two port rows and no rear at all.
     #
-    # This was previously an emissive status LED at x = -7.60. Apple's front
-    # hardware diagram shows a plain round jack on the right and no light at
-    # all — the M5 Max has no front status LED, and the Touch ID button is on
-    # the underside, not here. So the cut, the lens and the spill light all
-    # go; what stays is a bored round socket with a dark cavity.
-    #
-    # add_round_socket only builds the tube; the skin still has to be opened
-    # for it, otherwise the jack sits buried under the panel.
-    jack_x = -6.60
-    cut_from_body(body, "Front_Headphone", jack_x, y_face + 0.20, zc,
-                  0.66, 0.60, 0.66, bevel=0.08, mats=mats)
-    paint_recess_black(body, y_face + 0.02, y_face + 0.55,
-                       abs(jack_x) + 0.45, zc - 0.45, zc + 0.45)
-    add_round_socket("Front_Headphone", jack_x, zc, 0.26, y_face + 0.10, mats,
-                     depth=0.34, inward=1.0)
-    return jack_x
+    # Sign convention, stated once because getting it backwards has now cost
+    # two separate bugs: +Y is the FRONT (USB-C, SDXC, status LED) and -Y is
+    # the REAR (the I/O row and the exhaust field).
+    y_face = -D / 2.0
+    # the socket mouth sits just inside the skin
+    y_mouth = y_face + 0.10
+
+    for name, x, w, h in REAR_PORTS:
+        cut_from_body(body, "Rear_" + name, x, y_face + 0.20, IO_Z,
+                      w + 0.20, 0.60, h + 0.20, bevel=0.05, mats=mats)
+        paint_recess_black(body, y_face - 0.58, y_face + 0.02,
+                           abs(x) + w / 2.0 + 0.12, IO_Z - h / 2.0 - 0.12,
+                           IO_Z + h / 2.0 + 0.12)
+        # `inward` is the direction the socket body runs, in model +Y/-Y.
+        # The rear face is at -Y, so inward is +1.
+        add_socket("Port_" + name, x, IO_Z, w, h, y_mouth, mats,
+                   depth=0.34, wall=0.045, inward=+1.0)
+
+    # The rear sockets pass inward=+1, meaning their bodies run toward +Y
+    # (inward, away from the -Y skin), so the inlet's depths go +Y too.
+    add_ac_inlet("Port_ACInlet", AC_INLET_X, IO_Z, AC_INLET_W, AC_INLET_H,
+                 y_face, body, mats, inward=+1.0)
+
+    # 3.5 mm headphone jack.
+    add_cylinder("_cut_headphone", HEADPHONE_X, y_face + 0.20, IO_Z,
+                 HEADPHONE_R + 0.10, 0.60, mats["cavity"], verts=40, axis="Y")
+    boolean_diff(body, bpy.data.objects["_cut_headphone"], "Cut_Headphone")
+    add_round_socket("Port_Headphone", HEADPHONE_X, IO_Z, HEADPHONE_R, y_mouth,
+                     mats, depth=0.34, inward=+1.0)
+
+    build_power_button(mats, body, y_face, inward=+1.0)
+    build_rear_icons(mats, y_face)
+    return body
+
+
+def build_power_button(mats, body, y_face, inward=1.0):
+    """The power button: a shallow debossed circle carrying the power glyph.
+
+    This is a power button, NOT a Touch ID sensor. Apple's own specs page for
+    this machine lists no biometrics hardware, the mark engraved on the panel
+    is the IEC power symbol, and the X-ray cutaway shows no fingerprint
+    sensor. Naming it Touch ID imported a feature the product does not have.
+
+    Measured outer diameter 8.6 mm (the connected-component pass reports the
+    3.9 mm power glyph, which is a different feature entirely).
+
+    `inward` is the direction into the case. The deboss, the ring and the
+    glyph are all placed with `y_face + inward * d`; writing them as
+    `y_face - d` left the button's ring 1.3 mm outside the rear skin and put
+    the model's depth at 199 mm.
+    """
+    def y_at(d):
+        return y_face + inward * d
+
+    # Deboss: a shallow dish, so the button catches a different highlight than
+    # the surrounding panel — which is the only thing that makes it read.
+    cut_from_body(body, "PowerButton", POWER_BTN_X, y_at(0.05), IO_Z,
+                  POWER_BTN_R * 2, 0.30, POWER_BTN_R * 2, bevel=0.02, mats=mats)
+    add_cylinder("PowerButton_ring", POWER_BTN_X, y_at(0.115), IO_Z,
+                 POWER_BTN_R - POWER_BTN_GAP_W / 2.0, POWER_BTN_GAP_W, mats["alu"],
+                 verts=64, axis="Y")
+    # The glyph: an open arc plus the vertical stroke. The arc's radius and the
+    # gap's width used to be written here as 0.52 * POWER_BTN_R and 0.05, i.e.
+    # restated constants that nothing compared against anything.
+    # tools/touchid_probe.py measured the photograph instead: the dark is an
+    # annulus at 1.50..2.25 mm and the gap is 0.30 mm. The offline renderer was
+    # meanwhile drawing a FILLED disc of radius 0.52 R and a 0.6 mm ring, so the
+    # two files disagreed about the same button and the disagreement showed up
+    # as a port-row dark-share error. Both now read the spec.
+    add_arc_decal("PowerButton_glyph_arc", POWER_BTN_X, IO_Z, POWER_BTN_GLYPH_R,
+                  POWER_BTN_GLYPH_R - POWER_BTN_GLYPH_W / 2.0,
+                  POWER_BTN_GLYPH_A0, POWER_BTN_GLYPH_A1,
+                  y_at(-0.005), mats["silk"], thickness=POWER_BTN_GLYPH_W)
+    add_box("PowerButton_glyph_bar", POWER_BTN_X, y_at(-0.005),
+            IO_Z + POWER_BTN_R * 0.30,
+            POWER_BTN_GLYPH_W, 0.02, POWER_BTN_R * 0.46, mats["silk"])
+
+
+def add_arc_decal(name, x, z, r, width, a0, a1, y, mat, thickness=0.05,
+                  samples=48):
+    """A flat annular sector lying on a panel — glyph strokes."""
+    verts, faces = [], []
+    for i in range(samples + 1):
+        a = math.radians(a0 + (a1 - a0) * i / samples)
+        c, s = math.cos(a), math.sin(a)
+        verts.append((x + (r - width / 2) * c, y, z + (r - width / 2) * s))
+        verts.append((x + (r + width / 2) * c, y, z + (r + width / 2) * s))
+    for i in range(samples):
+        b = i * 2
+        faces.append((b, b + 1, b + 3, b + 2))
+    return simple_mesh(name, verts, faces, mat)
+
+
+def add_polygon_decal(name, x, z, pts, y, mat, scale=1.0):
+    """A flat polygon lying on a panel, from 2-D points in the XZ plane."""
+    verts = [(x + px * scale, y, z + pz * scale) for px, pz in pts]
+    faces = [tuple(range(len(verts)))]
+    return simple_mesh(name, verts, faces, mat)
+
+
+def add_stroke_decal(name, x0, z0, x1, z1, halfw, y, mat, caps=True):
+    """A flat band of the given half-width from one point to another.
+
+    `caps` adds a disc at each end, which is what the offline rasteriser's
+    capsule test draws. Without them the two disagree by half a stroke width at
+    every joint - invisible in a render, but it moves the measured bounding box
+    the acceptance test compares against Apple's photograph.
+    """
+    dx, dz = x1 - x0, z1 - z0
+    L = math.hypot(dx, dz)
+    if L < 1e-9:
+        return None
+    ux, uz = dx / L, dz / L
+    px, pz = -uz * halfw, ux * halfw
+    obj = add_polygon_decal(name, 0.0, 0.0,
+                            [(x0 + px, z0 + pz), (x1 + px, z1 + pz),
+                             (x1 - px, z1 - pz), (x0 - px, z0 - pz)],
+                            y, mat, scale=1.0)
+    if caps:
+        for k, (ex, ez) in enumerate(((x0, z0), (x1, z1))):
+            add_disc_decal("%s_cap%d" % (name, k), ex, ez, halfw, y, mat)
+    return obj
+
+
+def add_disc_decal(name, x, z, r, y, mat, verts=28):
+    pts = [(r * math.cos(2.0 * math.pi * i / verts),
+            r * math.sin(2.0 * math.pi * i / verts)) for i in range(verts)]
+    return add_polygon_decal(name, x, z, pts, y, mat, scale=1.0)
+
+
+def build_rear_icons(mats, y_face):
+    """The engraved icon row above the connectors.
+
+    Apple's rear photo shows, left to right in model space: the Thunderbolt
+    bolt over the USB-C group, the Ethernet mark over the RJ45, the USB trident
+    over the USB-A pair, the word HDMI over the HDMI port and the headphone
+    mark over the jack, all at 60.3 mm from the top, i.e. ICON_Z.
+
+    Nothing about the marks is decided here. ICON_GLYPHS in the spec carries
+    the geometry, measured off apple_hw_back.jpg with tools/glyph_grid.py, and
+    tools/compare_render.py rasterises the same list so the model and the
+    checked image cannot disagree. That matters because the previous version
+    kept its own coordinates and its own shapes: the offsets were 7.9 mm out
+    for four of the five, the Ethernet mark was four upward chevrons with no
+    dots instead of two outward chevrons with three, the trident ended in a
+    square instead of a circle, the bolt was twice the size it should be, and
+    "HDMI" was a font nobody here could measure.
+    """
+    y = y_face + 0.004
+    silk = mats["silk"]
+
+    for name, parts in sorted(S.ICON_GLYPHS.items()):
+        cx = S.ICON_GLYPH_X[name]
+        for i, part in enumerate(parts):
+            tag = "Icon_%s_%02d" % (name, i)
+            kind = part[0]
+            if kind == "poly":
+                add_polygon_decal(tag, cx, ICON_Z,
+                                  [(px, pz) for px, pz in part[1]],
+                                  y, silk, scale=1.0)
+            elif kind == "stroke":
+                _, x0, z0, x1, z1, halfw = part
+                add_stroke_decal(tag, cx + x0, ICON_Z + z0, cx + x1, ICON_Z + z1,
+                                 halfw, y, silk)
+            elif kind == "disc":
+                _, px, pz, r = part
+                add_disc_decal(tag, cx + px, ICON_Z + pz, r, y, silk)
+            elif kind == "arc":
+                # The headphone headband. compare_render.glyph_mask has
+                # rasterised arcs since the glyph was re-measured, but this
+                # dispatcher had no arm for them and raised ValueError on the
+                # first one - so the build died before writing the .blend and
+                # the headphone mark existed in the checked image and nowhere
+                # else. One table, every consumer able to read all of it.
+                _, px, pz, r, hw, a0, a1 = part
+                add_arc_decal(tag, cx + px, ICON_Z + pz, r, hw, a0, a1, y, silk)
+            else:
+                raise ValueError("unknown icon primitive %r" % (kind,))
+
+
+# add_text_decal() used to live here, to set the "HDMI" wordmark as a Blender
+# text object. It is gone with the rest of the old icon code: a font's metrics
+# are not something this project can measure against a photograph, so the
+# wordmark is strokes in the spec like every other glyph.
+
+
+# --------------------------------------------------------------- front panel
+def build_front_io(mats, body):
+    """Front: 2x USB-C, the SDXC slot and the status LED.
+
+    The front is at -Y and a front view puts model +X on the image's RIGHT, so
+    the measured image-x maps through x = x_img - 98.5. FRONT_PORTS is already
+    in model space: the ports sit on the -X side and the LED on the +X side.
+
+    The SDXC slot measures 27.0 x 2.7 mm. The previous build used 13.0 x 3.4,
+    which is less than half the real opening.
+    """
+    # The FRONT panel is at y = +D/2. This duplicated the rear's y_face, so
+    # the two I/O rows were cut into the same face - the rear row first, then
+    # the front row straight over it.
+    y_face = D / 2.0
+    # the socket mouth sits just inside the skin; the body runs further
+    # inward, i.e. toward -Y
+    y_mouth = y_face - 0.10
+
+    for name, x, w, h in FRONT_PORTS:
+        cut_from_body(body, "Front_" + name, x, y_face + 0.20, IO_Z,
+                      w + 0.20, 0.60, h + 0.20, bevel=0.05, mats=mats)
+        paint_recess_black(body, y_face - 0.02, y_face + 0.58,
+                           abs(x) + w / 2.0 + 0.12, IO_Z - h / 2.0 - 0.12,
+                           IO_Z + h / 2.0 + 0.12)
+        # The socket's mouth sits just inside the panel and the body runs
+        # further inward. The front face is at +Y, so inward is -1; the rear
+        # face is at -Y, so the rear row passes +1. Getting this backwards put
+        # every socket's back plate 2.4 mm outside the skin and the depth at
+        # 203 mm against Apple's 197.
+        add_socket("Front_" + name, x, IO_Z, w, h, y_mouth, mats,
+                   depth=0.34, wall=0.045, inward=-1.0)
+
+    # Status LED: a 2.7 mm white lens standing slightly proud of the panel.
+    # The previous build bored a 3.5 mm headphone jack here — right position,
+    # wrong feature, and a black hole where the real part has a light.
+    add_cylinder("StatusLED", LED_X, y_face + 0.02, IO_Z, LED_R, 0.10,
+                 mats["led"], verts=48, axis="Y")
+    return body
+
+
+# -------------------------------------------------------------- the underside
+def build_bottom_cover(mats):
+    """The removable bottom cover, and the intake perforated across it.
+
+    This is not a styling detail. Apple says the machine has "over 4,000
+    perforations on the back and bottom of the enclosure" (newsroom,
+    2022-03-08) — the bottom is a named intake face, not bare metal. iFixit
+    confirms it from the other end: the bottom cover is the only external
+    serviceable part (4x T10 8 mm under an adhesive screw pad) and it is
+    opened by "insert the point of a spudger in one of the bottom cover's
+    ventilation holes" (iFixit 165048).
+
+    The cover is therefore a separate plate under the extrusion, perforated
+    with the same obround lattice as the base band, and the four feet stand
+    on it.
+    """
+    return add_box("BottomCover", 0.0, 0.0, FOOT_H / 2.0,
+                   W - 2 * R_VERT, D - 2 * R_VERT, FOOT_H, mats["alu"],
+                   bevel=0.06)
+
+
+def build_bottom_intake(mats):
+    """A lattice of intake holes across the bottom cover, drilled upward.
+
+    Apple's "over 4,000 perforations on the back and bottom" is the only
+    published count and it covers BOTH faces, so the split between them is not
+    published - and the rear field (3,038) plus the base band (3,104) already
+    exceed 4,000 on their own, so the count cannot be used to derive this
+    face's size either. It is placed to read as a real intake and is labelled
+    as the design choice it is, exactly as the fan bore already is.
+    """
+    ring = rounded_rect(max(GRILLE_HOLE_RX - GRILLE_HOLE_RZ, 1e-4),
+                        GRILLE_HOLE_RZ, GRILLE_HOLE_RZ, seg=4, edge_sub=1)
+    nring = len(ring)
+    half_x = W / 2.0 - R_VERT - 0.30
+    half_y = D / 2.0 - R_VERT - 0.30
+    depth = GRILLE_RECESS
+    verts, faces = [], []
+    placed = 0
+    cols = int(2 * half_x / GRILLE_PITCH_X)
+    rows_n = int(2 * half_y / GRILLE_PITCH_X)
+    for iy in range(rows_n):
+        for ix in range(cols):
+            x = -half_x + ix * GRILLE_PITCH_X
+            y = -half_y + iy * GRILLE_PITCH_X
+            base = len(verts)
+            # Two rings extruded UP from the cover's outer face into the
+            # enclosure. A hole is a tube along its own normal; building the
+            # ring in the (x, y) plane and pushing it along +Z is the same
+            # construction as build_grille_field, rotated to face down.
+            for oz in (0.0, depth):
+                for ox, oy in ring:
+                    verts.append((x + ox * GRILLE_HOLE_RX,
+                                  y + oy * GRILLE_HOLE_RZ,
+                                  FOOT_H + oz))
+            for k in range(nring):
+                k2 = (k + 1) % nring
+                faces.append((base + k, base + k2,
+                              base + nring + k2, base + nring + k))
+                faces.append((base + nring + k, base + nring + k2,
+                              base + k2, base + k))
+            placed += 1
+    obj = simple_mesh("BottomIntake", verts, faces, mats["grille"], smooth=True)
+    print("  BottomIntake: %d holes, pitch %.3f cm" % (placed, GRILLE_PITCH_X))
+    return obj
 
 
 def build_bottom_details(mats):
-    """Underside: four feet and the Touch ID power button.
+    """Four rubber feet standing on the perforated bottom cover.
 
-    The underside is a plain aluminium plate. Earlier passes added four round
-    ventilation intakes between the feet, inferred from a dark region in a
-    product photograph; there is no direct evidence for them and the brief is
-    that only the rear face is perforated, so the bottom is solid apart from
-    the feet and the power button.
+    The round control is the power button on the rear panel, modelled in
+    build_power_button; there is nothing else on the underside.
     """
     for i, (sx, sy) in enumerate(((-1, -1), (1, -1), (-1, 1), (1, 1))):
-        add_cylinder(
-            "Foot_%d" % (i + 1), sx * 7.45, sy * 7.45, FOOT_H / 2.0,
-            0.55, FOOT_H, mats["rubber"],
-        )
-
-    # Touch ID power button, underside toward the rear-left
-    add_cylinder("PowerButton", -5.60, 6.05, FOOT_H + 0.05, 0.56, 0.12, mats["port"])
-    add_cylinder(
-        "PowerRing", -5.60, 6.05, FOOT_H + 0.115, 0.34, 0.02, mats["alu"], verts=48,
-    )
+        add_cylinder("Foot_%d" % (i + 1), sx * FOOT_XY, sy * FOOT_XY,
+                     FOOT_H + 0.10, FOOT_R, 0.20, mats["rubber"])
 
 
-# -------------------------------------------------------------------- lighting
+# ------------------------------------------------------------------ internals
+def build_internals(mats):
+    """The inside of the machine, from Apple's X-ray photography.
+
+    reference/hk/hw_elements_fans_xray.jpg and hw_elements_case_xray.jpg are
+    rear cutaways with the case ghosted. Read as fractions of the 95 mm height
+    they give the stack, top to bottom:
+
+      * two blower shrouds, z 8.9 .. 5.0, each ~80 mm wide, split by a narrow
+        centre gap and filling nearly the whole width — this is the single
+        largest mass in the machine and it is what the rear grille feeds
+      * the finned heatsink immediately under them, z 5.0 .. 4.5
+      * the copper heat-pipe / board plane, z 4.5 .. 4.1, spanning the width
+      * the logic board and its components, z 4.1 .. 2.3
+      * the power supply at the bottom right, z 2.3 .. 0.9, with the copper
+        coil that shows as a bright disc in the X-ray; connectors bottom left
+      * the perforated base band wrapping the bottom edge
+
+    An earlier revision put the fans at z 6.15, the heatsink at 3.60 and the
+    power supply at z 3.0. That stacks everything too low and leaves the whole
+    bottom third of the case empty, when the PSU and speaker belong down at the
+    intake they feed.
+    """
+    wall_top = H_TOTAL - 0.30
+    fan_z = FAN_Z
+    fan_r = FAN_R
+    for k, sx in enumerate((-1, 1)):
+        cx = sx * FAN_X
+        # shroud: a rounded rectangular duct with a round bore.  Centred on the
+        # measured axis, not lifted: FAN_Z/FAN_SHROUD_H are already set so the
+        # top face lands just under the top cover's inner face.
+        add_box("Fan%d_shroud" % (k + 1), cx, 0.0, fan_z,
+                FAN_SHROUD_W, FAN_SHROUD_D, FAN_SHROUD_H, mats["fan"], bevel=0.35)
+        add_tube("Fan%d_bore" % (k + 1), cx, 0.0, fan_z, fan_r, fan_r - 0.22,
+                 FAN_SHROUD_H * 0.96, mats["cavity"], verts=64)
+        add_cylinder("Fan%d_hub" % (k + 1), cx, 0.0, fan_z, fan_r * 0.30, 1.30,
+                     mats["fan"], verts=32, axis="Z")
+        # impeller blades, swept around the hub. The blade angle is handed to
+        # the primitive: add_box ends with transform_apply, so assigning
+        # rotation_euler afterwards would spin the baked world-space mesh
+        # about the origin and fling the blade right across the case.
+        blades = 11
+        for b in range(blades):
+            a = 2 * math.pi * b / blades
+            bx, by = cx + (fan_r * 0.58) * math.cos(a), (fan_r * 0.58) * math.sin(a)
+            add_box("Fan%d_blade%02d" % (k + 1, b), bx, by, fan_z,
+                    fan_r * 0.72, 0.16, 1.00, mats["fan"], bevel=0.04,
+                    rot=(0.0, 0.0, a + 0.55))
+
+    # The centre spine between the two fan bays, and the cross-member that
+    # interrupts it. Measured off the X-ray: a bright bar with a hard edge on
+    # both sides of the case centreline, 3.3 mm wide, running the full height
+    # of the fan bay. The earlier build left this whole region empty, which is
+    # the most visible thing missing from a front cutaway.
+    add_box("Centre_spine", 0.0, 0.0, (SPINE_Z0 + SPINE_Z1) / 2,
+            SPINE_W, SPINE_D, SPINE_Z1 - SPINE_Z0, mats["alu_raw"], bevel=0.04)
+    add_box("Spine_crossmember", 0.0, 0.0, (SPINE_BREAK_Z0 + SPINE_BREAK_Z1) / 2,
+            SPINE_BREAK_HALF_X * 2, SPINE_D * 0.72,
+            SPINE_BREAK_Z1 - SPINE_BREAK_Z0, mats["fan"], bevel=0.06)
+
+    # Heatsink mass directly under the fans: a finned aluminium block.
+    hs_z = HEATSINK_Z
+    add_box("Heatsink_base", 0.0, 0.0, hs_z, 16.8, 12.6, 0.50, mats["alu_raw"])
+    for i in range(32):
+        fy = -5.9 + i * 0.37
+        add_box("Heatsink_fin%02d" % i, 0.0, fy, hs_z + 0.48, 16.4, 0.16, 0.80,
+                mats["alu_raw"])
+    # the package under the fin stack
+    add_box("SoC_package", 0.0, 0.0, hs_z - 0.36, 4.6, 4.6, 0.28, mats["chip"])
+
+    # The copper heat pipe / board plane that crosses the whole machine here.
+    add_box("HeatPipe_plane", 0.0, 0.0, PIPE_Z, 17.6, 14.4, 0.22, mats["copper"])
+
+    # Logic board, full width.
+    pcb_z = PCB_Z
+    add_box("LogicBoard", 0.0, 0.0, pcb_z, 18.2, 15.6, 0.16, mats["pcb"])
+    # memory packages either side of the SoC
+    for k, sx in enumerate((-1, 1)):
+        add_box("Memory_%d" % (k + 1), sx * 3.9, 0.0, pcb_z + 0.22, 4.2, 2.6, 0.28,
+                mats["memory"])
+    # two SSD modules, removable, on the board
+    for k, sy in enumerate((-1, 1)):
+        add_box("SSD_%d" % (k + 1), -5.2, sy * 3.4, pcb_z + 0.20, 4.0, 2.2, 0.24,
+                mats["insul"], bevel=0.05)
+
+    # Power supply, bottom right, with the copper coil that reads as a bright
+    # disc in the rear X-ray.
+    add_box("PSU", 5.90, 1.4, PSU_Z, 5.6, 9.4, 1.70, mats["fan"], bevel=0.12)
+    add_cylinder("PSU_coil", 5.90, -3.6, PSU_Z + 0.10, 1.15, 1.40,
+                 mats["copper"], verts=32, axis="Z")
+    add_box("PSU_cap", 5.90, 3.4, PSU_Z + 0.20, 5.0, 2.0, 1.40,
+            mats["insul"], bevel=0.10)
+
+    # The row of tall electrolytics.  These were on the logic board at
+    # z pcb_z+0.60, which put their tops at 4.65 cm: through the copper plane
+    # at 3.95 and into the heatsink base at 4.75.  Both are legal Blender
+    # objects and nothing complained.  The X-ray puts the row where it
+    # actually is - a line of cylinders standing on the floor frame, spanning
+    # the lower middle of the case just left of the supply, z 0.6..1.3 cm.
+    for k in range(7):
+        add_cylinder("Cap_%d" % (k + 1), -6.0 + k * 1.3, -2.0, 1.00,
+                     0.30, 0.70, mats["alu_raw"], verts=20, axis="Z")
+    # heat pipe: a copper tube running from the PSU up into the heatsink, which
+    # is what the X-ray shows looping on the right.
+    pipe_pts = [(5.90, -4.0, PSU_Z + 1.20), (5.90, -5.4, PIPE_Z + 0.40),
+                (4.20, -6.0, PIPE_Z + 0.35), (1.90, -5.6, PIPE_Z + 0.20),
+                (0.00, -4.6, hs_z - 0.10), (0.00, -2.2, hs_z + 0.05)]
+    for i in range(len(pipe_pts) - 1):
+        add_cylinder_between("HeatPipe%d" % i, pipe_pts[i], pipe_pts[i + 1],
+                             0.20, mats["copper"], verts=20)
+
+    # Speaker and the front I/O harness, bottom left.
+    add_box("Speaker", -6.6, -5.4, SPEAKER_Z, 2.6, 2.2, 1.10,
+            mats["fan"], bevel=0.12)
+    add_box("FrontIO", -6.6, 3.2, SPEAKER_Z + 0.20, 3.4, 5.0, 0.80,
+            mats["insul"], bevel=0.10)
+
+    # The internal frame the boards bolt to.
+    for sx in (-1, 1):
+        add_box("Frame_side%d" % (sx > 0), sx * 8.95, 0.0, 4.0, 0.5, 15.0, 7.4,
+                mats["alu_raw"])
+    add_box("Frame_floor", 0.0, 0.0, 0.52, 17.4, 15.0, 0.22,
+            mats["alu_raw"])
+    return True
+
+
+# -------------------------------------------------------------------- studio
 def build_studio(scene):
-    # A generated studio environment. At roughness 0.19 the shell is very close
-    # to a mirror, and a plain constant world background gives it nothing to
-    # reflect — the result reads as matte plastic. A gradient sky plus bright
-    # overhead strips is what makes the aluminium read as metal.
+    """A generated studio environment.
+
+    At roughness 0.2 the shell is close to a mirror, and a constant world
+    background gives it nothing to reflect — the body then reads as matte white
+    plastic, which is the single loudest tell that a render is CG. A gradient
+    sky with a bright overhead band is what makes the aluminium read as metal.
+    """
     world = bpy.data.worlds.new("Studio")
     scene.world = world
     world.use_nodes = True
@@ -1032,15 +1216,20 @@ def build_studio(scene):
     grad = nt.nodes.new("ShaderNodeTexGradient")
     grad.gradient_type = "EASING"
     ramp = nt.nodes.new("ShaderNodeValToRGB")
-    ramp.color_ramp.elements[0].position = 0.32
-    ramp.color_ramp.elements[0].color = (0.55, 0.57, 0.62, 1.0)   # floor bounce
-    ramp.color_ramp.elements[1].position = 0.72
-    ramp.color_ramp.elements[1].color = (0.96, 0.97, 1.00, 1.0)   # sky
-    mid = ramp.color_ramp.elements.new(0.55)
-    mid.color = (0.80, 0.82, 0.86, 1.0)
+    ramp.color_ramp.elements[0].position = 0.28
+    ramp.color_ramp.elements[0].color = (0.16, 0.17, 0.20, 1.0)   # floor bounce
+    ramp.color_ramp.elements[1].position = 0.78
+    ramp.color_ramp.elements[1].color = (0.98, 0.99, 1.00, 1.0)   # sky
+    mid = ramp.color_ramp.elements.new(0.50)
+    mid.color = (0.46, 0.48, 0.53, 1.0)
     mapping = nt.nodes.new("ShaderNodeMapping")
     mapping.inputs["Rotation"].default_value = (math.radians(90), 0, 0)
     coord = nt.nodes.new("ShaderNodeTexCoord")
+    # The Mapping node's Vector is an INPUT socket, not an output. Linking a
+    # node's output into it raises "Same input/output direction of sockets" and
+    # aborts the build, which is how a studio environment that has been in
+    # this file for a long time became the last thing standing between the
+    # model and a saved .blend.
     nt.links.new(coord.outputs["Generated"], mapping.inputs["Vector"])
     nt.links.new(mapping.outputs["Vector"], grad.inputs["Vector"])
     nt.links.new(grad.outputs["Fac"], ramp.inputs["Fac"])
@@ -1050,7 +1239,7 @@ def build_studio(scene):
     bpy.ops.mesh.primitive_plane_add(size=200.0, location=(0, 0, 0))
     floor = bpy.context.active_object
     floor.name = "Floor"
-    floor.data.materials.append(make_mat("Floor", (0.80, 0.80, 0.81), 0.0, 0.45))
+    floor.data.materials.append(make_mat("Floor", (0.62, 0.62, 0.63), 0.0, 0.42))
 
     def area(name, loc, rot, size, power):
         bpy.ops.object.light_add(type="AREA", location=loc, rotation=rot)
@@ -1058,26 +1247,15 @@ def build_studio(scene):
         o.name = name
         o.data.size = size
         o.data.energy = power
-        o.data.color = (1.0, 1.0, 1.0)
         return o
 
-    # Powers are tuned against the new gradient world, which already supplies
-    # most of the ambient. Adding these on top at full strength blows out.
-    area("Key", (-26, -30, 34), (math.radians(46), 0, math.radians(-40)), 40, 520)
-    # A strong fill from the front-right puts a hot specular band along the top
-    # edge, which reads as a raised "lid rim" on an enclosure that is actually a
-    # single machined block. Softening it removes the tray illusion.
-    area("Fill", (30, -20, 20), (math.radians(66), 0, math.radians(56)), 34, 140)
-    area("Rim", (6, 30, 30), (math.radians(-52), 0, math.radians(8)), 30, 260)
-    area("Top", (0, 0, 40), (0, 0, 0), 34, 150)
-    # grazing light aimed into the rear bay so the connectors are not a
-    # featureless black rectangle: a shallow back-side fill skims the panel
-    # and puts a specular edge on every connector rim
-    area("RearBayFill", (2, 34, 16), (math.radians(74), 0, math.radians(184)), 12, 260)
+    area("Key", (-26, -30, 34), (math.radians(46), 0, math.radians(-40)), 40, 420)
+    area("Fill", (30, -20, 20), (math.radians(66), 0, math.radians(56)), 34, 120)
+    area("Rim", (6, 30, 30), (math.radians(-52), 0, math.radians(8)), 30, 230)
+    area("Top", (0, 0, 40), (0, 0, 0), 34, 130)
+    # grazing light into the rear connectors so they are not a black bar
+    area("RearBayFill", (2, 34, 16), (math.radians(74), 0, math.radians(184)), 12, 200)
 
-    # Large white bounce cards. At roughness 0.19 the shell is a mirror, and
-    # bare area lights alone give it nothing to reflect — these provide the
-    # soft gradient streaks that make brushed aluminium read as metal.
     for name, loc, rot, sx, sy in (
         ("BounceL", (-34, 4, 16), (math.radians(90), 0, math.radians(90)), 40, 26),
         ("BounceR", (34, 4, 16), (math.radians(90), 0, math.radians(-90)), 40, 26),
@@ -1092,20 +1270,33 @@ def build_studio(scene):
 
 # --------------------------------------------------------------------- cameras
 VIEWS = [
-    ("01_front", "front", 46.0, 6.0, 7.0),
-    ("02_side", "side", 62.0, 90.0, 8.0),
-    ("03_rear", "rear", 46.0, 186.0, 7.0),
-    ("04_hero", "3q", 42.0, 214.0, 12.0),
-    ("05_top", "top", 62.0, 200.0, 90.0),
-    ("06_bottom", "bottom", 60.0, 20.0, -90.0),
-    ("07_front_closeup", "front", 26.0, 0.0, 2.0),
+    ("01_front", "front", 0.0, 2.0, 46.0),
+    ("02_side", "side", 90.0, 2.0, 46.0),
+    ("03_rear", "rear", 180.0, 2.0, 46.0),
+    ("04_hero", "3q", 215.0, 16.0, 44.0),
+    ("05_top", "top", 200.0, 88.0, 44.0),
+    ("06_bottom", "bottom", 20.0, -88.0, 44.0),
+    ("07_front_closeup", "front", 0.0, 4.0, 17.0),
+    ("08_rear_closeup", "rear", 180.0, 4.0, 17.0),
+    ("09_grille_macro", "rear", 180.0, 10.0, 9.0),
+    ("10_cutaway", "cutaway", 208.0, 14.0, 42.0),
 ]
+
+TARGETS = {
+    # Closeup camera targets. +Y is the front (USB-C, SDXC, LED) and -Y is the
+    # rear (the I/O row and the exhaust field); these were all on +Y, so the
+    # "rear closeup" framed the front.
+    "07_front_closeup": (-5.9, D / 2.0, IO_Z),
+    "08_rear_closeup": (2.0, -D / 2.0, IO_Z),
+    "09_grille_macro": (0.0, -D / 2.0, 6.6),
+    "10_cutaway": (0.0, 0.0, H_TOTAL / 2.0),
+}
 
 
 def place_camera(name, az, el, dist, target):
     az_r, el_r = math.radians(az), math.radians(el)
     cam_data = bpy.data.cameras.new(name)
-    cam_data.lens = 62.0
+    cam_data.lens = 85.0 if dist < 20.0 else 62.0
     cam = bpy.data.objects.new(name, cam_data)
     bpy.context.collection.objects.link(cam)
     cam.location = Vector((
@@ -1119,12 +1310,12 @@ def place_camera(name, az, el, dist, target):
 
 
 # ------------------------------------------------------------------------ main
-def evaluated_bbox():
+def evaluated_bbox(skip=("Floor", "BounceL", "BounceR")):
     deps = bpy.context.evaluated_depsgraph_get()
     lo = Vector((1e9, 1e9, 1e9))
     hi = Vector((-1e9, -1e9, -1e9))
     for obj in bpy.context.scene.objects:
-        if obj.type != "MESH" or obj.name in ("Floor", "BounceL", "BounceR"):
+        if obj.type != "MESH" or obj.name in skip:
             continue
         ev = obj.evaluated_get(deps)
         for corner in ev.bound_box:
@@ -1144,10 +1335,14 @@ def main():
 
     mats = build_materials()
     body = build_body(mats)
-    build_rear_io(mats)
+    hollow_body(body, mats)
+    build_rear_io(mats, body)
     build_front_io(mats, body)
+    build_bottom_cover(mats)
+    build_bottom_intake(mats)
     build_bottom_details(mats)
-    build_grille_band(mats, body)
+    build_grilles(mats)
+    build_internals(mats)
     build_studio(scene)
 
     lo, hi, size = evaluated_bbox()
@@ -1167,31 +1362,37 @@ def main():
         return
 
     scene.render.engine = "CYCLES"
-    scene.cycles.samples = 48
+    scene.cycles.samples = int(os.environ.get("SAMPLES", "48"))
     scene.cycles.use_denoising = True
     scene.render.resolution_x = 1500
     scene.render.resolution_y = 1125
-    scene.render.film_transparent = False
     scene.render.image_settings.file_format = "PNG"
 
-    for name, _, az, el, dist in VIEWS:
-        target = (0.0, 0.0, H_TOTAL / 2.0)
-        if name == "07_front_closeup":
-            target = (-5.0, -D / 2.0, 2.8)
+    for name, kind, az, el, dist in VIEWS:
+        target = TARGETS.get(kind, (0.0, 0.0, H_TOTAL / 2.0))
+        if kind == "cutaway":
+            # Hide the near half of the shell so the internals read.
+            body.hide_render = True
+            for o in scene.objects:
+                if o.name in ("RearField",):
+                    o.hide_render = True
         cam = place_camera("CAM_" + name, az, el, dist, target)
-        if name == "07_front_closeup":
-            cam.data.lens = 85.0
         scene.camera = cam
         path = os.path.join(OUT_DIR, name + ".png")
         scene.render.filepath = path
         try:
             bpy.ops.render.render(write_still=True)
             print("RENDERED %s" % path)
-        except Exception as exc:  # GPU backend unavailable -> CPU retry
+        except Exception as exc:
             print("GPU_FAIL %s (%s) -> CPU retry" % (name, exc))
             scene.cycles.device = "CPU"
             bpy.ops.render.render(write_still=True)
             print("RENDERED %s" % path)
+        if kind == "cutaway":
+            body.hide_render = False
+            for o in scene.objects:
+                if o.name in ("RearField",):
+                    o.hide_render = False
 
     print("BUILD_OK")
 
