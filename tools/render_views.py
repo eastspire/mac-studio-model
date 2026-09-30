@@ -41,6 +41,22 @@ def main():
     sc.render.resolution_y = int(os.environ.get("HEIGHT", "1125"))
     sc.render.image_settings.file_format = "PNG"
 
+    # Blender 4.x defaults to AgX, an HDR tone mapper built to ROLL OFF
+    # CONTRAST. It compresses the difference between a lit metal panel and the
+    # shadow inside a 1.4 mm perforation until they read as the same value.
+    # Measured with AgX in place: 87% of the pixels sat between 20 and 116,
+    # and the panel and all of its holes were inside that one band, with a
+    # local spread of 1.0 out of 255. The geometry was perfect the whole time -
+    # every bore is real and a ray passes through it. AgX was erasing it.
+    #
+    # Apple's product photography is a direct tone map. A perforation is
+    # 1.5 mm of black anodised bore and it has to be allowed to go black
+    # against lit aluminium.
+    sc.view_settings.view_transform = "Standard"
+    sc.view_settings.look = "None"
+    sc.view_settings.exposure = float(os.environ.get("EXPOSURE", "0.0"))
+    sc.view_settings.gamma = 1.0
+
     only = os.environ.get("ONLY")
     want = set(only.split(",")) if only else None
     os.makedirs(B.OUT_DIR, exist_ok=True)

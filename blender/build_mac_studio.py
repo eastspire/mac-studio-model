@@ -233,6 +233,40 @@ def cut_from_body(body, name, cx, cy, cz, sx, sy, sz, bevel=0.0, mats=None):
     return boolean_diff(body, cutter, "Cut_" + name)
 
 
+def paint_bore_black(obj, y_lo, y_hi, half_x, z_lo, z_hi, slot=1):
+    """Paint the INSIDE of a perforation with the cavity material.
+
+    The bore walls come out of the boolean wearing the SHELL's material
+    index, so every hole is polished aluminium inside and out. Nothing in the
+    geometry is wrong - the bores are real, they are the right size, and a ray
+    passes straight through - but a hole whose walls are the same metal as the
+    panel around it is invisible under a studio light. Measured: 35,828 bore
+    faces at y = -98.0 mm, every one of them Aluminium_Silver, against 120,349
+    faces of the outer skin at -98.5 mm also Aluminium_Silver. A 256-sample
+    render with denoising off, at 1400 px, came back with a local luminance
+    spread of 1.0 out of 255 across the whole field.
+
+    A real Mac Studio's perforations are dark: the walls are anodised, and
+    they are in shadow for most of their depth. That is what makes the field
+    read as perforated at all.
+
+    The bore is identified by position rather than by normal. Its faces sit
+    in a thin shell part-way through the panel's thickness, between the outer
+    skin and the inner wall, and nothing else in that band belongs to a hole.
+    A normal test would catch the bore but also the skin, since a bore's wall
+    and the panel's face are both nearly perpendicular to the view.
+
+    Only the y band of the bore is touched, so the panel's own faces at the
+    skin and at the inner wall keep the aluminium.
+    """
+    for p in obj.data.polygons:
+        c = p.center
+        if (y_lo < c.y < y_hi and abs(c.x) < half_x
+                and z_lo < c.z < z_hi):
+            p.material_index = slot
+    return obj
+
+
 def paint_recess_black(obj, y_lo, y_hi, x_extent, z_lo, z_hi, slot=1):
     """Force every face inside a recess to the cavity material.
 
@@ -987,6 +1021,23 @@ def build_grilles(mats, body=None, span=0.0):
     print("  cutting the rear field out of the shell ...")
     cut_in_batches(body, field, "RearField")
     report_stage(body, "after_field")
+
+    # THE BORES GO DARK. The boolean hands the hole walls the shell's own
+    # material, so a perforation whose walls are polished aluminium is
+    # invisible - measured 1.0/255 of local contrast across the whole field at
+    # 256 samples with denoising off. The bore is a thin shell part-way
+    # through the 1.5 mm panel, and the band below is where it measures.
+    mid = WALL * 0.5
+    paint_bore_black(body, -D / 2.0 + mid - 0.06, -D / 2.0 + mid + 0.06,
+                     UPPER_HALF_X + 0.15,
+                     UPPER_Z0 + 0.05, UPPER_Z1 - 0.05)
+    painted = sum(1 for p in body.data.polygons
+                  if p.material_index == 1
+                  and -D / 2.0 < p.center.y < -D / 2.0 + WALL + 0.02
+                  and UPPER_Z0 < p.center.z < UPPER_Z1
+                  and abs(p.center.x) < UPPER_HALF_X)
+    print("  rear field: %d bore faces painted dark" % painted)
+    report_stage(body, "painted")
     return band, field
 
 
@@ -1694,9 +1745,21 @@ VIEWS = [
     ("04_hero", "3q", 235.0, 16.0, 44.0),
     ("05_top", "top", 200.0, 88.0, 44.0),
     ("06_bottom", "bottom", 20.0, -88.0, 44.0),
-    ("07_front_closeup", "front", 90.0, 4.0, 17.0),
-    ("08_rear_closeup", "rear", 270.0, 4.0, 17.0),
-    ("09_grille_macro", "rear", 270.0, 10.0, 9.0),
+    # The closeups are framed by LENS AND DISTANCE TOGETHER, and they were
+    # wrong by a wide margin. An 85 mm lens 9 cm from the subject sees 3.8 cm
+    # across, and the chassis is 19.7 cm wide and 9.5 cm tall - so the frame
+    # was smaller than the subject and a 10-degree elevation threw it out of
+    # shot entirely. Measured, a 9-ray grid across `09_grille_macro`: four
+    # rays hit nothing at all, and the rest struck the body between z 26.7 and
+    # 66.0 mm, so the top half of every closeup was empty background.
+    #
+    # The macro wants a frame about 12 cm across, which at 85 mm is 55 cm of
+    # distance - or a shorter lens. 50 mm from 28 cm gives 10 cm, which covers
+    # a dozen hole columns at a 1.86 mm pitch and keeps the bores resolvable
+    # at render resolution.
+    ("07_front_closeup", "front", 90.0, 4.0, 24.0),
+    ("08_rear_closeup", "rear", 270.0, 4.0, 24.0),
+    ("09_grille_macro", "rear", 270.0, 0.0, 28.0),
     ("10_cutaway", "cutaway", 235.0, 14.0, 42.0),
 ]
 
@@ -1714,7 +1777,18 @@ TARGETS = {
 def place_camera(name, az, el, dist, target):
     az_r, el_r = math.radians(az), math.radians(el)
     cam_data = bpy.data.cameras.new(name)
-    cam_data.lens = 85.0 if dist < 20.0 else 62.0
+    # The lens follows from the DISTANCE and HOW MUCH THE FRAME HAS TO COVER.
+    # It used to be a bare `85 if dist < 20 else 62`, which is a portrait lens
+    # at a macro distance: 85 mm at 9 cm sees 3.8 cm across, the chassis is
+    # 19.7 cm wide, and the subject falls out of shot. Measured, a 9-ray grid
+    # across `09_grille_macro`: four rays hit nothing at all and the rest
+    # struck the body below the field.
+    #
+    # Blender's sensor is 36 mm wide, so a frame W cm across at distance D
+    # needs f = 18 * D / W. The widths are chosen per view, and the clamp
+    # keeps the result inside a range that does not distort.
+    half = W / 2.0 if dist >= 40.0 else (6.0 if dist >= 20.0 else 5.0)
+    cam_data.lens = max(24.0, min(120.0, 18.0 * dist / half))
     cam = bpy.data.objects.new(name, cam_data)
     bpy.context.collection.objects.link(cam)
     # bpy.context.collection is not always the scene's collection - under
@@ -1802,6 +1876,23 @@ def main():
     scene.render.resolution_x = 1500
     scene.render.resolution_y = 1125
     scene.render.image_settings.file_format = "PNG"
+
+    # Blender 4.x defaults to AgX, which is an HDR tone mapper whose entire
+    # job is to ROLL OFF CONTRAST - it compresses the gap between a lit metal
+    # panel and the shadow inside a 1.4 mm perforation until the two are the
+    # same value. Measured with AgX in place: geometrically perfect bores, a
+    # ray passing straight through every one of them, and a render with a
+    # local luminance spread of 1.0 out of 255 across the whole field. The
+    # 87% of pixels between 20 and 116 were the panel and all of its holes
+    # together, in one indistinguishable band.
+    #
+    # Apple's product photography is a direct tone map. A perforation is
+    # 1.5 mm of black anodised bore, and it has to be allowed to go black
+    # against lit aluminium. AgX will not let it.
+    scene.view_settings.view_transform = "Standard"
+    scene.view_settings.look = "None"
+    scene.view_settings.exposure = 0.0
+    scene.view_settings.gamma = 1.0
 
     for name, kind, az, el, dist in VIEWS:
         # TARGETS is keyed by VIEW NAME. Looking it up by `kind` instead meant
