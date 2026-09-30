@@ -239,17 +239,40 @@ def fillet_inset(z, z_lo, z_hi):
 
 
 # -------------------------------------------------------------- grille masks
-def base_mask(px, py, half_x, half_y):
-    """The base band wraps the entire perimeter: always 1.0.
+def base_mask(px, py, half_x, half_y, z=None):
+    """The base band wraps the perimeter, but NOT through the corners or the
+    bottom fillet.
 
     It is visible on the front panel in Apple's front product shot, not just
-    around the back. An earlier build keyed this on the rear panel and left the
-    front's lower edge as bare metal.
+    around the back. An earlier build keyed this on the rear panel and left
+    the front's lower edge as bare metal.
+
+    Two exclusions, both because the prism runs along the walk's normal and
+    that normal is wrong for these parts of the perimeter:
+
+      * The CORNER ARCS. There the normal points diagonally out of the
+        machine, so a 2.25 mm prism at 45 degrees shears the corner off
+        instead of boring through it.
+      * The BOTTOM FILLET, `R_HORZ` = 0.38 cm deep. The band spans z 0.2 to
+        0.744 cm, so 63% of its height sits inside the fillet, where the
+        surface curves away underneath. The walk's normal is horizontal even
+        down there, so the prism runs parallel to the panel and shaves the
+        bottom edge: Body came back with z_min 2.35 mm instead of 0.
+
+    The flat part of the band therefore starts where the fillet ends, at
+    FOOT_H + R_HORZ = 0.58 cm, and runs to the top of the band. `z` is passed
+    through by build_grille_field for exactly this test.
     """
+    fx = abs(px) > (half_x - R_VERT)
+    fy = abs(py) > (half_y - R_VERT)
+    if fx and fy:
+        return 0.0                      # on a corner arc
+    if z is not None and z < (FOOT_H + R_HORZ):
+        return 0.0                      # still inside the bottom fillet
     return 1.0
 
 
-def field_mask(px, py, half_x, half_y):
+def field_mask(px, py, half_x, half_y, z=None):
     """The upper field is a plain RECTANGLE on the REAR panel.
 
     Sign convention, which is the whole bug this function used to have: in
@@ -533,7 +556,7 @@ def add_tube(name, cx, cy, cz, r_out, r_in, h, mat, verts=40, axis="Z"):
 # ------------------------------------------------------- perforated fields
 def build_grille_field(mats, name, z_lo, z_hi, recess, depth, pitch, hole_r,
                        mask_fn, seg=8, row_pitch=None, stagger=0.0,
-                       max_holes=40000, hole_rz=None):
+                       max_holes=40000, hole_rz=None, span_from_floor=0.0):
     """Punch a lattice of round hole tubes into a recessed field.
 
     `recess` and `depth` are separate and are not interchangeable:
@@ -659,123 +682,203 @@ def build_grille_field(mats, name, z_lo, z_hi, recess, depth, pitch, hole_r,
         s = (stagger * pitch) if (stagger and row % 2) else 0.0
         while s < total:
             px, py, tx, ty = point_at(s)
-            if mask_fn(px, py, hx, hy) < 0.5:
+            # z is passed so base_mask can exclude the bottom fillet, where the
+            # walk's horizontal normal is the wrong direction for a prism.
+            # Both masks accept it; only base_mask uses it.
+            if mask_fn(px, py, hx, hy, z0) < 0.5:
                 s += pitch
                 continue
             if placed >= max_holes:
                 break
             rx, ry = -ty, tx                       # outward normal
             base = len(verts)
-            # A hole is a four-ring TUBE along the NORMAL. Its cross-section
-            # lives in the (tangent, up) plane, and the four rings differ only
-            # in how far they are pushed along the normal:
+            # A hole is a SOLID PRISM along the NORMAL: nring side faces and
+            # two caps, no inner wall.
             #
-            #   ring 0,1  the mouth, ON the recessed floor
-            #   ring 2,3  the same mouth, `depth` further in, closing the tube
+            # It is a prism, not a tube, because it is a CUTTER. Subtracting a
+            # tube leaves its bore's core untouched - a tube's section is an
+            # annulus, so the difference mills a square channel and leaves the
+            # metal in the middle standing. Measured 2.8% open. A prism fills
+            # the cross-section, so the difference removes the skin.
             #
-            # The ring's first coordinate is scaled by hole_r (across) and its
-            # second by rz (up the panel) - those are the hole's own axes, not
-            # the tube's length. Getting that wrong is the bug that put every
-            # hole 0.71 mm proud: a first version applied the ring's first axis
-            # on the NORMAL and the second on the tangent, so each "hole" was a
-            # flat ring lying tangentially and extruded vertically. A second
-            # version then reused the ring's vertical offset as the tube's
-            # length, which extruded the tube `depth` TALL and filled the whole
-            # perforated field with black geometry.
+            # `span_from_floor` is where the prism STARTS, measured along the
+            # inward normal from the recessed floor. It is negative when the
+            # prism has to begin OUTSIDE the floor, which is the whole point:
+            # the floor is not the skin. Measured on a build that started at
+            # the floor, a scan across a hole row found the opening to be
+            # 0.30 mm wide against a 1.42 mm hole - 21% - because the prism
+            # only crossed the inner wall and left the outer skin standing
+            # with a rounded slot in it.
             #
-            # These tubes are VISIBLE geometry, not cutters. They model the
-            # bore's walls. Whether the panel is actually open is a separate
-            # question that no amount of hole-counting answers - see the
-            # KNOWN GAP in build_grilles().
+            # To open the hole on the skin, the prism starts `recess` OUTSIDE
+            # the floor and runs WALL + recess inward, ending on the cavity
+            # face. That total is what build_grilles() computes.
             rz = hole_r if hole_rz is None else hole_rz
-            for od in (-depth, 0.0, -depth, 0.0):
+            for od in (span_from_floor, span_from_floor + depth):
                 for ox, oy in ring:
                     verts.append((px + tx * (ox * hole_r) + rx * od,
                                   py + ty * (ox * hole_r) + ry * od,
                                   z0 + oy * rz))
             for k in range(nring):
                 k2 = (k + 1) % nring
-                # groove-floor ring -> skin ring (the visible wall)
                 faces.append((base + k, base + k2,
                               base + nring + k2, base + nring + k))
-                # back ring -> groove-floor ring (the closing cap)
-                faces.append((base + 2 * nring + k2, base + 2 * nring + k,
-                              base + k, base + k2))
-                # skin ring -> back ring (the inner wall)
-                faces.append((base + nring + k, base + nring + k2,
-                              base + 3 * nring + k2, base + 3 * nring + k))
-                # back ring -> skin ring (the outer rim)
-                faces.append((base + 3 * nring + k2, base + 3 * nring + k,
-                              base + 2 * nring + k, base + 2 * nring + k2))
+            # the two caps, as n-gons. Winding matters: EXACT resolves the
+            # difference from the cutter's facing, and a prism whose caps face
+            # the wrong way is treated as the complement.
+            faces.append(tuple(base + k for k in range(nring)))
+            faces.append(tuple(base + nring + k for k in range(nring - 1, -1, -1)))
             placed += 1
             s += pitch
 
-    obj = simple_mesh(name, verts, faces, mats["grille"], smooth=True)
+    obj = simple_mesh(name, verts, faces, mats["grille"], smooth=False)
+    # A hole is nring side faces plus two caps. cut_in_batches() reads this
+    # off the object rather than inferring it: "whichever even number divides
+    # the face count" picks 16 for the band, which slices every batch
+    # mid-hole.
+    obj["holes"] = placed
+    obj["nring"] = nring
+    obj["hole_faces"] = nring + 2
     print("  %s: %d holes, %d rows, pitch %.3f cm, hole %.3f x %.3f cm"
           % (name, placed, rows, pitch, hole_r,
              hole_r if hole_rz is None else hole_rz))
     return obj
 
 
-def build_grilles(mats):
+def build_grilles(mats, body=None):
     """The two ventilation features: the wrap-around base band and the single
     large rear field.
 
     `recess` and `depth` are separate quantities and are not interchangeable:
     `recess` is how far grille_inset() stepped the SKIN back (it places the hole
-    mouths), `depth` is how much metal is left under that skin. Conflating them
-    is subtle because both are small, and it produces a correct-looking tube in
-    the wrong place rather than an error.
+    mouths), `depth` is how much metal is left under that skin.
 
-    KNOWN GAP: these holes are not yet open. The prism built here is a cutter,
-    but nothing subtracts it from the shell, so the panel is still sealed and a
-    ray down the middle of a hole hits Body at exactly the same distance as one
-    through the bridge beside it. Measure with tools/ground_truth_open.py, which
-    reads the built .blend rather than the spec: the spec's analytic surface and
-    the loft can disagree, and when they do a verifier that uses the spec agrees
-    with itself and disagrees with the object.
+    THE PRISM RUNS FROM OUTSIDE THE SKIN TO THE CAVITY FACE.
 
-    Three boolean approaches were built and measured, and all three are recorded
-    here rather than deleted, because each one ruled something out:
-      * a four-ring tube as the cutter - 2.8% open. A pipe's section is an
-        annulus, so the difference leaves the bore's core untouched: it milled a
-        square channel and left the groove floor bridging it.
-      * a solid prism spanning WALL - recess - 1.8% open, shell intact. The
-        prism started on the recessed floor and left a ring of uncut outer skin
-        0.85 mm proud of the bore.
-      * a solid prism spanning WALL + recess - 100% open and the shell GONE,
-        Body down to 0 vertices, X short by 13 mm. The length was right but the
-        walk is on a ROUNDED rectangle, so at the corners the prism juts
-        sideways into the side panels and the top.
+    The walk sits on the RECESSED FLOOR, not on the skin: grille_inset stepped
+    the skin in by `recess` across the whole field, so the floor is `recess`
+    further out than the surface you actually look at. A prism that starts on
+    the floor only crosses the inner wall and leaves the outer skin standing
+    with a rounded slot cut in it. Measured: a scan across a hole row found the
+    opening 0.30 mm wide against a 1.42 mm hole, 21% of what it should be, and
+    the area sweep read 0.4% open.
 
-    So the length is not the last problem: the prism has to follow the local
-    surface normal and the LOCAL wall thickness, which means the loft has to
-    hand its per-row wall depth to this function rather than taking a constant.
+    So the prism starts `recess` OUTSIDE the floor and runs `WALL + recess`
+    inward, landing exactly on the cavity face. Both ends are then outside the
+    material the boolean has to remove, which is also what stops a coplanar
+    face at either end.
+
+    Two spans were tried and both are wrong in opposite directions:
+      * WALL, starting on the floor - 21% of each hole opens. See above.
+      * WALL + recess, starting on the floor - 0.24 cm, 63% longer than the
+        wall. The walk is on a ROUNDED rectangle, so at the corners the prism
+        juts sideways into the side panels as well as through the back: 100%
+        open and Body reduced to 0 vertices, X short by 13 mm. The span was
+        right; the START was wrong. Starting `recess` out gives the same span
+        and no sideways reach.
     """
-    span = WALL - UPPER_DEPTH
-    print("  band  prism %.4f cm (%.2f mm) over a %.2f mm wall"
-          % (span, span * 10, WALL * 10))
-    print("  field prism %.4f cm (%.2f mm) over a %.2f mm wall"
-          % (span, span * 10, WALL * 10))
+    if body is None:
+        raise RuntimeError(
+            "build_grilles needs the Body to cut against. The prisms alone are "
+            "geometry sitting in the metal: a ray down the middle of a hole "
+            "hits Body at the same distance as one through the bridge beside "
+            "it, so a build that prints a hole count proves nothing about "
+            "whether the panel is open. See tools/ground_truth_open.py.")
+
+    span = WALL + UPPER_DEPTH
+    print("  band  prism %.4f cm (%.2f mm) over a %.2f mm wall, from %.2f mm"
+          % (span, span * 10, WALL * 10, GRILLE_RECESS * 10))
+    print("        outside the skin")
+    print("  field prism %.4f cm (%.2f mm) over a %.2f mm wall, from %.2f mm"
+          % (span, span * 10, WALL * 10, UPPER_DEPTH * 10))
+    print("        outside the skin")
 
     band = build_grille_field(
         mats, "BaseGrille",
         GRILLE_BAND_Z0 + 0.055, GRILLE_BAND_Z1 - 0.055,
         GRILLE_RECESS, span, GRILLE_PITCH_X, GRILLE_HOLE_RX,
         mask_fn=base_mask, seg=8, row_pitch=GRILLE_PITCH_Z,
-        stagger=GRILLE_STAGGER, hole_rz=GRILLE_HOLE_RZ)
+        stagger=GRILLE_STAGGER, hole_rz=GRILLE_HOLE_RZ,
+        span_from_floor=-GRILLE_RECESS)
 
     field = build_grille_field(
         mats, "RearField",
         UPPER_Z0 + 0.10, UPPER_Z1 - 0.10,
         UPPER_DEPTH, span, UPPER_PITCH_X, UPPER_HOLE_R,
         mask_fn=field_mask, seg=10, row_pitch=UPPER_PITCH_Z,
-        stagger=UPPER_STAGGER)
-    print("  NOTE: these tubes are the bore walls, but nothing subtracts them")
-    print("        from the shell, so the panel is still sealed. Run")
-    print("        tools/ground_truth_open.py for the real open fraction - a")
-    print("        build that prints a hole count proves nothing about it.")
+        stagger=UPPER_STAGGER, span_from_floor=-UPPER_DEPTH)
+
+    # THE CUT. Everything above places 6,197 prisms; none of it opens
+    # anything. A prism that is not subtracted from the shell is a lump of
+    # geometry buried in metal, and a ray through the middle of a hole meets
+    # Body at exactly the distance it would through the bridge beside it.
+    #
+    # The prism is the drill; the bore's walls are what the boolean leaves
+    # behind, so the lattice object is deleted rather than kept to sit
+    # inside its own cut.
+    #
+    # CUT IN BATCHES. Handing EXACT one 122,760-face cutter made it fail
+    # open, and it did not fail loudly: the shell came back as a fragment of
+    # the rear wall with the whole chassis gone, and the bbox audit reported
+    # that as a 3.5 mm shortfall in Z rather than as the catastrophe it was.
+    # Chunks keep every intersection local.
+    print("  cutting the base band out of the shell ...")
+    cut_in_batches(body, band, "BaseGrille")
+    print("  cutting the rear field out of the shell ...")
+    cut_in_batches(body, field, "RearField")
     return band, field
+
+
+def cut_in_batches(body, lattice, label, batch=400):
+    """Subtract `lattice` from `body`, then delete it.
+
+    The face stride and the hole count come off the object itself
+    (`hole_faces`, `holes`). They are not guessable: a hole is `nring + 2`
+    faces for a solid prism, and nring differs per field and is not what
+    `seg` implies - the band builds an obround ring, so one hole is 26 faces,
+    not the 34 seg=8 suggests. Guessing it as "whatever even number divides
+    the face count" picked 16 and sliced every batch mid-hole.
+    """
+    stride = int(lattice.get("hole_faces", 0))
+    placed = int(lattice.get("holes", 0))
+    if stride < 5 or placed < 1:
+        raise RuntimeError(
+            "cut_in_batches: %s carries no lattice shape (hole_faces=%r "
+            "holes=%r) - it has to come from build_grille_field"
+            % (label, stride, placed))
+    nbatch = (placed + batch - 1) // batch
+    print("    %s: %d holes x %d faces, %d batches"
+          % (label, placed, stride, nbatch))
+    for k in range(nbatch):
+        lo, hi = k * batch, min(placed, (k + 1) * batch)
+        boolean_diff(body, slice_mesh(lattice, lo * stride, hi * stride,
+                                       "_cut_" + label),
+                     "Cut_%s_%d" % (label, k))
+    bpy.data.objects.remove(lattice, do_unlink=True)
+    print("    %s: done" % label)
+    return body
+
+
+def slice_mesh(obj, first, last, name):
+    """A standalone mesh object holding obj's polys [first, last)."""
+    me = bpy.data.meshes.new(name)
+    remap = {}
+    new_verts = []
+    polys = []
+    for p in obj.data.polygons[first:last]:
+        ring = []
+        for vi in p.vertices:
+            if vi not in remap:
+                remap[vi] = len(new_verts)
+                new_verts.append(obj.data.vertices[vi].co.copy())
+            ring.append(remap[vi])
+        polys.append(tuple(ring))
+    me.from_pydata([tuple(v) for v in new_verts], [], polys)
+    me.materials.append(obj.data.materials[0])
+    ob = bpy.data.objects.new(name, me)
+    ob.matrix_world = obj.matrix_world.copy()
+    bpy.context.scene.collection.objects.link(ob)
+    return ob
 
 
 # ------------------------------------------------------------------- sockets
@@ -1476,7 +1579,7 @@ def main():
     build_bottom_cover(mats)
     build_bottom_intake(mats)
     build_bottom_details(mats)
-    build_grilles(mats)
+    build_grilles(mats, body)
     build_internals(mats)
     build_studio(scene)
 
