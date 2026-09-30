@@ -951,7 +951,28 @@ def build_grilles(mats, body=None, span=0.0):
     if span <= 0.0:
         raise RuntimeError("build_grilles needs a positive span; got %r" % span)
 
-    start = 0.0
+    # PRISM START - UNVERIFIED HYPOTHESIS, and the comment is deliberately not
+    # written as a conclusion. The previous build left the rear field 100%
+    # blocked: at every one of 41 hole centres on the middle row there is still
+    # a face of the outer skin within 0.35 mm, and a 1.42 mm hole cannot
+    # contain a whole triangle, so those holes are not open. The 327,754 bore
+    # faces at y = -98.0 mm are real but sit 0.5 mm behind an intact skin.
+    #
+    # The obvious suspect was the cutter's front cap sitting exactly in the
+    # plane of the outer face, y = -98.5 mm, since a boolean with a
+    # coplanar cap is a degenerate case. Testing it on a 4 x 4 cm slab with a
+    # 0.15 cm wall: 0.0 and -0.02 both cut cleanly, giving exactly 2 boundary
+    # loops and 15.985 of 16.000 cm2 of surviving skin. Both readings are what
+    # one good hole looks like by area - a single 1.42 mm hole is 0.09% of the
+    # face - so the control did NOT reproduce the failure, and the coplanarity
+    # is not established as the cause.
+    #
+    # It stays as -0.02 because starting a cutter outside the target is the
+    # correct thing to do regardless, and it costs nothing. Whether it fixes
+    # the field is not yet known and must not be assumed: the next build has
+    # to be checked with tools/skin_loops.py before anyone repeats any of the
+    # numbers that were reported as passes.
+    start = -0.02
     # THE BAND'S ROWS RUN ALONG THE VERTICAL WALL, ABOVE THE BOTTOM FILLET.
     #
     # The walk is a horizontal rounded rectangle at a fixed z, so it can only
