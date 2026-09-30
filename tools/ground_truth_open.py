@@ -84,22 +84,18 @@ def main():
 
     # THE TEST, and getting it right matters more than the sampling.
     #
-    # "Did the ray travel far enough?" cannot work. The shell is WALL thick
-    # and the cavity is WALL deep, so a ray that threads a hole and strikes
-    # the cavity's far wall has travelled the same distance as one that stopped
-    # in the metal. Sweeping a hole row at 0.02 mm steps - eight samples across
-    # each hole - measured 0/858 open, while a per-hole probe using a
-    # different distance threshold reported 3069/3069. Both were measuring the
-    # built model; only one of them was measuring holes.
+    # "Did the ray travel far enough?" only works if the threshold sits
+    # BETWEEN the skin and the cavity wall, and the two are 1.5 mm apart. Set
+    # the threshold past both and every bridge counts as a hole; set it at the
+    # wall and nothing counts, because a ray that stops in metal has travelled
+    # exactly the wall's thickness. Measured both ways on the same build:
+    # WALL * 0.9 read 0.0% on a perforated panel, and this file's earlier
+    # "deeper than WALL + 0.02" read 100% on a sealed one.
     #
-    # The unambiguous test is: does the ray meet the panel AT ITS SKIN? A hole
-    # mouth is a gap in the skin, so a ray down one arrives at the cavity wall
-    # having crossed no skin at all. Find the skin's plane once, from a point
-    # that is definitionally on a bridge, and require the first hit to be
-    # deeper than the skin by more than the wall's own thickness.
-    #
-    # Anything shallower than that is the face itself: the bridge between two
-    # holes, or the lip around a bore.
+    # Half the wall is the only threshold that separates them, and it works
+    # the same way for every grille here because they share a wall thickness:
+    # a ray down a hole crosses no skin and meets the cavity wall at ~0; a ray
+    # through a bridge meets the cavity wall at exactly WALL.
     y = -S.D / 2.0 - 0.5
     STANDOFF = 0.5
     z0, z1 = S.UPPER_Z0 + 0.10, S.UPPER_Z1 - 0.10
@@ -119,12 +115,9 @@ def main():
         return 1
     skin_y = min(v.y for v in region)
     print("outermost Body surface on the rear: %+.4f" % skin_y)
-    # Past the skin, the only thing a ray can meet is the cavity's far wall,
-    # which sits a further WALL in. A bore's own wall is nearer than that and
-    # is not a hole - it is the rim.
-    depth_limit = S.WALL * 0.9
-    print("skin at %+.4f; open means the first hit is deeper than %.4f"
-          % (skin_y, depth_limit))
+    depth_limit = 0.5 * S.WALL
+    print("skin at %+.4f, wall %.4f; open means the first hit is deeper than "
+          "%.4f (half the wall)" % (skin_y, S.WALL, depth_limit))
 
     step = S.UPPER_HOLE_R * 0.5
     nu = max(4, int(2 * S.UPPER_HALF_X / step) + 1)
