@@ -52,21 +52,37 @@ def sweep(sc, dg, name, origin, direction, u_range, v_range, nu, nv,
             org = origin(u, v)
             hit, loc, nrm, _i, ob, _m = sc.ray_cast(dg, org, direction)
             total += 1
-            # A sample is open when the first surface met FACES AWAY from the
-            # incoming ray. The panel's skin faces the ray, so hitting it means
-            # the sample is on the metal; a ray that fell through a hole meets
-            # the cavity's far wall facing back the other way.
+            # A sample is open when the ray CROSSES THE SHELL - it must come
+            # out the other side, or at least reach something that is not the
+            # shell. Three criteria were tried and each was wrong in a way
+            # that only showed up against a real build:
             #
-            # This is the only criterion that survived measurement. Distance
-            # cannot work - the wall is WALL thick and the cavity is WALL deep,
-            # so "travelled far enough" is equally true of a hole and of metal
-            # that happens to be the same thickness. Comparing against a
-            # measured skin plane has the same problem, because the cavity's
-            # far wall sits only 0.075 in from a skin at -9.775.
-            if not hit or nrm.dot(direction) > 0.0:
+            #   * the hit's normal facing away from the ray. Blender's
+            #     ray_cast always returns a normal pointing back at the ray,
+            #     so this is false on every closed mesh: 0.0% on a panel whose
+            #     rays were visibly passing through.
+            #   * a distance from the skin. A hole's own lip is AT the skin,
+            #     so the first hit reads depth 0 whether or not it goes
+            #     anywhere; and a ray that crosses the whole machine has hits
+            #     on BOTH outer skins, so "deeper than the wall" is true of
+            #     every ray: 100% on the same panel.
+            #
+            # What separates them is the SECOND hit. Down a hole it is the fan
+            # shroud, the heatsink or the logic board - something the machine
+            # is made of. Down a bridge it is Body again, 0.2 mm in, because
+            # that is the cavity wall behind the metal.
+            depth = 0.0
+            if not hit:
                 opened += 1
             else:
-                blockers[ob.name] = blockers.get(ob.name, 0) + 1
+                org2 = loc + direction * 1e-5
+                hit2, loc2, _n, _i, ob2, _m = sc.ray_cast(dg, org2, direction)
+                if not hit2:
+                    opened += 1                      # went clean out the far side
+                elif ob2.name != "Body":
+                    opened += 1                      # reached the internals
+                else:
+                    blockers[ob2.name] = blockers.get(ob2.name, 0) + 1
     pct = 100.0 * opened / total if total else 0.0
     print("  %-12s %6d/%6d = %5.1f%% open   %s"
           % (name, opened, total, pct, blockers or ""))

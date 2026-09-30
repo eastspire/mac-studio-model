@@ -278,35 +278,26 @@ def fillet_inset(z, z_lo, z_hi):
 
 # -------------------------------------------------------------- grille masks
 def base_mask(px, py, half_x, half_y, z=None):
-    """The base band wraps the perimeter, but NOT through the corners or the
-    bottom fillet.
+    """The base band wraps the perimeter, but NOT through the corners.
 
     It is visible on the front panel in Apple's front product shot, not just
     around the back. An earlier build keyed this on the rear panel and left
     the front's lower edge as bare metal.
 
-    Two exclusions, both because the prism runs along the walk's normal and
-    that normal is wrong for these parts of the perimeter:
+    The corner arcs are excluded because the band's prisms there point
+    diagonally out of the machine, and a 2.5 mm prism at 45 degrees shears
+    the corner off rather than boring through it.
 
-      * The CORNER ARCS. There the normal points diagonally out of the
-        machine, so a 2.25 mm prism at 45 degrees shears the corner off
-        instead of boring through it.
-      * The BOTTOM FILLET, `R_HORZ` = 0.38 cm deep. The band spans z 0.2 to
-        0.744 cm, so 63% of its height sits inside the fillet, where the
-        surface curves away underneath. The walk's normal is horizontal even
-        down there, so the prism runs parallel to the panel and shaves the
-        bottom edge: Body came back with z_min 2.35 mm instead of 0.
-
-    The flat part of the band therefore starts where the fillet ends, at
-    FOOT_H + R_HORZ = 0.58 cm, and runs to the top of the band. `z` is passed
-    through by build_grille_field for exactly this test.
+    There is no z test here. It used to be `z < FOOT_H + R_HORZ`, to keep the
+    walk off the bottom fillet, and it silently became a no-op: build_grilles
+    raises the walk to exactly that height, so nothing was ever excluded by it
+    and the only thing keeping the band off the fillet was the walk's start
+    z. The test belongs where the decision is made.
     """
     fx = abs(px) > (half_x - R_VERT)
     fy = abs(py) > (half_y - R_VERT)
     if fx and fy:
         return 0.0                      # on a corner arc
-    if z is not None and z < (FOOT_H + R_HORZ):
-        return 0.0                      # still inside the bottom fillet
     return 1.0
 
 
@@ -927,9 +918,38 @@ def build_grilles(mats, body=None, span=0.0):
         raise RuntimeError("build_grilles needs a positive span; got %r" % span)
 
     start = 0.0
+    # THE BAND'S ROWS RUN ALONG THE VERTICAL WALL, ABOVE THE BOTTOM FILLET.
+    #
+    # The walk is a horizontal rounded rectangle at a fixed z, so it can only
+    # place holes on a wall that is vertical at that height. The band in the
+    # spec spans z 0.0 to 7.44 mm - which is where the band is on the real
+    # part, wrapping under the machine and up - but the bottom R_HORZ fillet
+    # is 3.8 mm deep, so everything below z 5.8 mm is the surface curving
+    # away underneath. There the walk's normal is horizontal and the metal is
+    # not, and a prism along a normal that leaves the shell is a cutter that
+    # cuts whatever is next.
+    #
+    # Measured, with the walk starting at the spec's z 0.55 mm: Body came
+    # back with 98,555 verts spanning z 5.98..89.98 mm, against 3,100
+    # spanning the full 0..95.0 before the cut. The bottom cap, the top cap
+    # and every side wall between them were gone. What survived was the two
+    # panels carrying the grilles - both 100% open, which is the only reason
+    # the build still looked like a perforated machine.
+    #
+    # So the rows start where the fillet ends and the row COUNT is preserved,
+    # which puts the band's top edge above the spec's 7.44 mm. That is a real
+    # disagreement with the photograph, and the honest reading is that the
+    # band's lower rows sit on the fillet, following it round, rather than on
+    # a vertical wall - and a horizontal walk cannot express that at all. It
+    # is the one part of the ventilation that is not modelled honestly yet.
+    band_z0 = FOOT_H + R_HORZ
+    band_z1 = band_z0 + 8 * GRILLE_PITCH_Z
+    print("  band  rows z %.3f..%.3f cm (fillet ends at %.3f; the spec puts "
+          "the band at 0..%.3f)"
+          % (band_z0, band_z1, band_z0, GRILLE_BAND_Z1))
     band = build_grille_field(
         mats, "BaseGrille",
-        GRILLE_BAND_Z0 + 0.055, GRILLE_BAND_Z1 - 0.055,
+        band_z0, band_z1,
         GRILLE_RECESS, span, GRILLE_PITCH_X, GRILLE_HOLE_RX,
         mask_fn=base_mask, seg=8, row_pitch=GRILLE_PITCH_Z,
         stagger=GRILLE_STAGGER, hole_rz=GRILLE_HOLE_RZ,
