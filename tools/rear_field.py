@@ -101,15 +101,33 @@ def check_open():
                         return True
         return False
 
-    # one row through the middle of the field, every pitch, and the rows above
-    # and below it: 41 x 3 = 123 probes across the panel's full width.
-    zc = (S.UPPER_Z0 + S.UPPER_Z1) / 2.0
-    probes = []
-    for dz in (-S.UPPER_PITCH_Z, 0.0, S.UPPER_PITCH_Z):
-        for k in range(-20, 21):
-            probes.append((k * S.UPPER_PITCH, zc + dz))
-    blocked = sum(1 for (x, z) in probes if covered(x, z, PROBE))
-    return len(probes), blocked, skin
+    # PROBE THE REAL LATTICE. build_grille_panel() does not start the columns at
+    # x = 0: it places `cols` columns of UPPER_PITCH_X from
+    # x0 = -(cols - 1) * pitch / 2, so the centres run -8.463 .. +8.463, and it
+    # offsets every other row by half a pitch. A probe at k * pitch from the
+    # origin therefore lands between the holes and reports 100% shut on a panel
+    # that is fully open, which is what it did for four commits.
+    #
+    # Recompute the lattice exactly as the builder does and probe every hole.
+    z_lo, z_hi = S.UPPER_Z0 + 0.10, S.UPPER_Z1 - 0.10
+    span = z_hi - z_lo
+    rows = max(1, int(span / S.UPPER_PITCH_Z) + 1)
+    cols = max(1, int(2.0 * min(S.UPPER_HALF_X, S.W / 2.0 - S.R_VERT)
+                      / S.UPPER_PITCH_X))
+    x0 = -(cols - 1) * S.UPPER_PITCH_X / 2.0
+    centres = []
+    for row in range(rows):
+        z = z_lo + span - row * S.UPPER_PITCH_Z
+        off = (S.UPPER_STAGGER * S.UPPER_PITCH_X * 0.5) if (
+            S.UPPER_STAGGER and row % 2) else 0.0
+        for col in range(cols):
+            px = x0 + col * S.UPPER_PITCH_X + off
+            if abs(px) > (S.W / 2.0 - S.R_VERT):
+                continue
+            centres.append((px, z))
+    blocked = sum(1 for (x, z) in centres if covered(x, z, PROBE))
+    return len(centres), blocked, skin, rows, cols, (min(c[0] for c in centres),
+                                                         max(c[0] for c in centres))
 
 
 def main():
@@ -145,10 +163,12 @@ def main():
 
     print()
     print("2. OPENNESS - does a face of the outer skin cover any hole centre?")
-    total, blocked, skin = check_open()
+    total, blocked, skin, rows, cols, xrange = check_open()
     open_pct = 100.0 * (1 - blocked / total)
-    print("   %d probes across 3 rows, one every %.2f mm"
-          % (total, S.UPPER_PITCH * 10))
+    print("   lattice: %d rows x %d cols, x %+.3f..%+.3f cm, stagger %.2f"
+          % (rows, cols, xrange[0], xrange[1], S.UPPER_STAGGER))
+    print("   probing all %d hole centres, radius %.2f mm"
+          % (total, PROBE * 10))
     print("   skin faces in the plane: %d" % skin)
     print("   hole centres still covered: %d / %d" % (blocked, total))
     print("   -> %.1f%% open against a design of %.1f%%"
