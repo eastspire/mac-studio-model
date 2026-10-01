@@ -26,7 +26,12 @@ OUT_DIR = os.path.abspath(
     if "--" in sys.argv
     else os.path.join(os.path.dirname(__file__), "..", "renders")
 )
-SAMPLES = int(sys.argv[sys.argv.index("--") + 2]) if len(sys.argv) > sys.argv.index("--") + 2 else 48
+# Samples come from the environment. The old line indexed sys.argv for "--"
+# twice on one line, and sys.argv.index RAISES when there is no "--" - which
+# is every invocation without a passthrough separator, so the script could not
+# be run the obvious way. Blender eats a bare trailing word on --python as a
+# flag, so an env var is also the only channel that survives.
+SAMPLES = int(os.environ.get("SAMPLES", "48"))
 
 # Studio furniture, not part of the product. Excluded from framing and from
 # any bounding-box measurement — bounce cards are 40cm wide and would swamp it.
@@ -52,6 +57,12 @@ EXCLUDE = {"Floor", "BounceL", "BounceR"}
 # 01_front.png showed the rear elevation and vice versa. The three-quarter and
 # hero angles are unaffected in the sense that they show the whole machine, but
 # the flat and closeup views are face-specific and were all mirrored.
+# THE AZIMUTHS HERE WERE WRONG, and the site published them. 244, 246 and 232
+# are three-quarter angles: +Y is the front and -Y the rear, so a rear shot is
+# az 270, and these four were rendering the machine's left flank while
+# docs/index.html captioned them "Rear field", "Perforation macro", "Rear at eye
+# level" and "Rear ports". Whoever made the PNGs by hand got it right, or
+# nobody looked; the script could not have produced them.
 VIEWS = [
     ("01_front", 90.0, 4.0, 62.0, 0.5, False),
     ("02_side", 180.0, 3.0, 62.0, 0.5, False),
@@ -79,16 +90,16 @@ VIEWS = [
     # from eye level the band is a 1.6 cm strip hidden behind the machine.
     # distance is in body-heights, so anything under ~0.5 crops to a handful of
     # holes and reads as "barely perforated".
-    ("09_grille_band", 244.0, -18.0, 99.0, 0.62, False),
+    ("09_grille_band", 268.0, -14.0, 99.0, 0.62, False),
     # Macro on the band itself (zoom 0.42 dollies in ~2.4x). The full-width
     # shot cannot resolve 1.2 mm holes on a 19.7 cm body — each hole lands at
     # ~10 px and the whole band reads as smooth metal.
-    ("10_grille_macro", 246.0, -14.0, 99.5, 0.14, False, 0.42),
+    ("10_grille_macro", 270.0, -10.0, 99.5, 0.14, False, 0.42),
     # Straight-on the band's face, framed by hand: the auto-fit camera always
     # frames the whole 19.7 cm body, so a 1.6 cm strip is ~4% of the frame and
     # the holes vanish into it. This one looks square at the band from 6 cm,
     # low and to the front-right, where the perforations face the lens.
-    ("11_grille_front", 232.0, -6.0, 99.5, 0.16, False, 0.16),
+    ("11_grille_front", 270.0, -6.0, 99.5, 0.16, False, 0.16),
 ]
 
 
@@ -154,7 +165,13 @@ def main():
     floor = bpy.data.objects.get("Floor")
     os.makedirs(OUT_DIR, exist_ok=True)
 
+    # ONLY=name,name lets one view be re-shot without paying for all of them.
+    only = os.environ.get("RENDER_ONLY", "").strip()
+    wanted = set(w.strip() for w in only.split(",")) if only else None
+
     for name, az, el, lens, zf, hide_floor, *rest in VIEWS:
+        if wanted is not None and name not in wanted:
+            continue
         if floor:
             floor.hide_render = hide_floor
         # optional trailing zoom: <1 dollies in for macro detail shots
