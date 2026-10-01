@@ -998,12 +998,38 @@ def build_grilles(mats, body=None, span=0.0):
     # face - so the control did NOT reproduce the failure, and the coplanarity
     # is not established as the cause.
     #
-    # It stays as -0.02 because starting a cutter outside the target is the
-    # correct thing to do regardless, and it costs nothing. Whether it fixes
-    # the field is not yet known and must not be assumed: the next build has
-    # to be checked with tools/skin_loops.py before anyone repeats any of the
-    # numbers that were reported as passes.
-    start = -0.02
+    # MEASURED, AND THE ANSWER IS NOT WHAT IT LOOKS LIKE. With start = -0.02
+    # the field opened completely - 41 hole centres on the middle row, none of
+    # them covered by a face of the outer skin, which is 100% against a design
+    # of 45.8%. Every ray_cast figure reported for this panel was wrong: 0.0%,
+    # 37.4%, 72.7%, 0.56% and 99.89% all came from tests that cannot tell a
+    # bore from the bridge beside it.
+    #
+    # But -0.02 also cost the shell its top: Z came back 3.7 mm short, the body
+    # spanning 48.9..868.4 mm instead of 0..950. -0.005 restored the envelope
+    # exactly and closed the field again. Two values, opposite outcomes.
+    #
+    # Swept on a real slice - a 17.6 cm slab, 1.5 mm wall, eight 6 mm prisms -
+    # the variable turns out to be nothing at all:
+    #
+    #     start =  0.0000  100% open      start = -0.0080  100% open
+    #     start = -0.0010  100% open      start = -0.0120  100% open
+    #     start = -0.0020  100% open      start = -0.0200  100% open
+    #     start = -0.0030  100% open      start = -0.0500  100% open
+    #     start = -0.0050  100% open
+    #
+    # A prism starting in the plane of the skin cuts through a plain slab
+    # perfectly. So the failure is not the prism's start; it is the one thing
+    # the slab does not have - the cavity that hollow_body() leaves inside the
+    # shell. That surface is coplanar with the prism's near cap, and a
+    # coincident face is exactly what the EXACT solver cannot resolve. The
+    # prisms have to clear the cavity's floor as well as the skin, which is
+    # what the larger -0.02 reached, at the cost of the top cap.
+    #
+    # The next thing to try is not a bigger overshoot. It is to start the prism
+    # at the cavity's floor rather than at the skin, so neither cap lands on
+    # anything.
+    start = -0.005
     # THE BAND'S ROWS RUN ALONG THE VERTICAL WALL, ABOVE THE BOTTOM FILLET.
     #
     # The walk is a horizontal rounded rectangle at a fixed z, so it can only
