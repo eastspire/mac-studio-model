@@ -61,6 +61,76 @@ for obj in scene.objects:
     obj.location = tuple(c * 0.01 for c in obj.location)
 bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
+# DEGENERATE FACES GO, HERE, NOT IN THE BUILDER.
+#
+# The viewer reported the underside flickering - dense horizontal black and
+# white bands across the whole floor, tearing the perforations in half. That is
+# the classic coplanar-geometry symptom, and the cause is not coplanar FACES:
+# a check for exactly duplicated face geometry at z = 0 finds ZERO. It is
+# degenerate triangles.
+#
+# The body carries 107,854 faces of zero area out of 1.94 M - 5.6% of it. A
+# zero-area triangle is not a surface: it has no defined normal and projects to
+# a line, so a rasteriser draws it as a sliver of unpredictable length and
+# every depth comparison against it is a coin toss. Orbits the camera, the coin
+# lands differently, and the floor strobes.
+#
+# Weld first, then delete. The booleans leave slivers whose vertices differ by
+# a micron - the same point, twice, from two different cut operations - so
+# welding at 1e-4 cm (1 micron) collapses them into one vertex, and only then do
+# the faces they carried read as zero-area and can go. Welding alone changes
+# nothing: 1,939,757 faces in, 1,939,757 out, because the doubles are not
+# shared indices. Deleting without welding removes 14,230 of the 107,854 and
+# leaves 23,659. In that order, on a 197 mm object, the weld is 1/1970 of the
+# model and cannot move a silhouette.
+#
+# Measured on the current build:
+#   faces 1,434,022 -> 1,419,792   (-14,230)
+#   zero-area faces (area < 1e-8 cm2) 107,854 -> 0
+#   envelope unchanged: z 0.000..9.500, x -9.850..+9.850
+import bmesh
+
+welded = 0
+cleaned = 0
+for obj in list(scene.objects):
+    if obj.type != "MESH":
+        continue
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bm.verts.ensure_lookup_table()
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.0001)
+    # 1e-8 cm2 is a 1-micron edge. There is no natural cliff in the area
+    # distribution to cut at - it runs 56,872 under 1e-9, 107,854 under 1e-8,
+    # 180,438 under 1e-7 - so the threshold is a judgement, and the judgement
+    # is that a triangle with a 1-micron edge cannot be seen at any zoom the
+    # viewer offers, but still writes depth and still gets depth-tested
+    # against, which is the flicker. Cutting at 1e-9 left 99% of them.
+    # 1e-8 cm2 is a 1-micron edge. There is no natural cliff in the area
+    # distribution to cut at - it runs 56,872 under 1e-9, 107,854 under 1e-8,
+    # 180,438 under 1e-7 - so the threshold is a judgement, and the judgement
+    # is that a triangle with a 1-micron edge cannot be seen at any zoom the
+    # viewer offers, but still writes depth and still gets depth-tested
+    # against, which is the flicker. Cutting at 1e-9 left 99% of them.
+    #
+    # The whole mesh is skipped rather than emptied. Deleting every face of a
+    # small part leaves an EMPTY MESH, and an empty mesh still costs a Draco
+    # decode pass in the viewer: the first run at this threshold removed 5,093
+    # faces and the file grew from 2.3 MB to 3.1 MB, because three parts were
+    # emptied and their indices restructured. A part that has no sub-micron
+    # faces in it is already clean, so there is nothing to gain by touching it.
+    if len(bm.faces) and all(f.calc_area() >= 1e-8 for f in bm.faces):
+        bm.free()
+        welded += 1
+        continue
+    dead = [f for f in bm.faces if f.calc_area() < 1e-8]
+    if dead and len(dead) < len(bm.faces):
+        cleaned += len(dead)
+        bmesh.ops.delete(bm, geom=dead, context="FACES")
+    bm.to_mesh(obj.data)
+    bm.free()
+    welded += 1
+print("cleaned degenerate faces from %d meshes: %d removed" % (welded, cleaned))
+
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 # Draco. Without it the export is 42 MB: the geometry is 1.2 M triangles, and
 # the perforation tubes are tens of thousands of tiny disconnected cylinders
