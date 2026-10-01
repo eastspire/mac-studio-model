@@ -160,16 +160,18 @@ def main():
     if env_ok and open_ok:
         print("   PASS - the shell is intact and the field is open.")
         return 0
-    if not env_ok and not open_ok:
-        print("   SHUT - the panel is intact and has no holes in it.")
+    if env_ok:
+        print("   SHUT - the panel is intact and has no holes in it. Every one of")
+        print("          the %d hole centres is still covered by the outer skin."
+              % blocked)
         return 1
-    if not env_ok:
+    if not open_ok:
         print("   VOID - the field reads open only because most of the panel"
               " is gone.")
         print("          This is what a passing hole count looks like on a"
               " broken shell.")
         return 1
-    print("   SHUT - the panel is open but the shell lost material.")
+    print("   DAMAGED - the shell lost material AND the field is shut.")
     return 1
 
 
