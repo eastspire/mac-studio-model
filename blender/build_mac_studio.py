@@ -523,6 +523,33 @@ def hollow_body(body, mats):
     # chassis's outer surface, and interior if it is deeper than that. The
     # underside needs the margin - the cavity cutter's bottom cap reaches
     # down to z = 0, so a strict test at FOOT_H leaves the base in the void.
+    repaint_exterior(body, wall)
+    return body
+
+
+def repaint_exterior(body, wall=None):
+    """The exterior must not wear the cavity's material. Run this LAST.
+
+    A boolean difference hands the cutter's faces to the result, and the cavity
+    cutter is Cavity_Black at base colour 0.012 - correct for the inside of a
+    shell, wrong for its outside.
+
+    This used to live inside hollow_body() and be called from there, which was
+    right for the shell and wrong for everything after it. The three ventilation
+    fields are cut AFTER hollowing, and every face those cuts create inherits
+    the cutter's material - 73,740 of them on the floor alone, 202 cm2 of it.
+    That is why the underside rendered as a black plate and the viewer showed
+    16% of its frame below 30/255. The repaint never saw them because it had
+    already run.
+
+    The exterior is identified by position, because that is the simpler of the
+    two to name: within `wall` of the chassis's outer surface is outside,
+    deeper than that is the cavity. The underside needs the margin - the cavity
+    cutter's bottom cap reaches down to z = 0, so a strict test at FOOT_H
+    leaves the base in the void.
+    """
+    if wall is None:
+        wall = WALL
     me = body.data
     fixed = 0
     for p in me.polygons:
@@ -2009,10 +2036,15 @@ def main():
     # behind every one of these numbers.
     build_grilles(mats, body, WALL + 0.45)
     report_stage(body, "grilles")
+    # AGAIN, AFTER THE FIELDS. Every face the grille cuts inherits
+    # Cavity_Black, and the floor field alone leaves 73,740 of them wearing it.
+    repaint_exterior(body)
 
     build_rear_io(mats, body)
     report_stage(body, "rear_io")
     build_front_io(mats, body)
+    # the port cuts are booleans too, and they land on the outer skin
+    repaint_exterior(body)
     build_bottom_cover(mats)
     build_bottom_details(mats)
     report_stage(body, "bottom_io")

@@ -9,6 +9,13 @@ h1 { font-size: clamp(28px, 4.5vw, 40px); margin-bottom: 6px; }
 .back a { text-decoration: none; }
 
 /* ------------------------------------------------------------- viewport */
+/* No background colour. The canvas is alpha-transparent (viewer.js sets
+   alpha:true and scene.background = null) so it composites over whatever the
+   page paints here, which is what makes the space around and - seen from below
+   - through the machine read as space rather than as a slab of grey at a fixed
+   distance. The #808080 that used to live here was duplicated inside
+   scene.background, and the pair of them is why orbiting underneath the
+   machine showed no ground at all. */
 #viewport {
   position: relative;
   width: 100%;
@@ -17,7 +24,7 @@ h1 { font-size: clamp(28px, 4.5vw, 40px); margin-bottom: 6px; }
   border: 1px solid var(--line);
   border-radius: 16px;
   overflow: hidden;
-  background: #808080;
+  background: transparent;
 }
 
 #viewport canvas { display: block; width: 100%; height: 100%; }

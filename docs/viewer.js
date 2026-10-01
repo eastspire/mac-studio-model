@@ -18,17 +18,35 @@ const viewport = document.getElementById('viewport');
 const loading = document.getElementById('loading');
 
 // ---------------------------------------------------------------- renderer
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+// alpha:true and NO scene.background, so the canvas composites over the page
+// instead of painting an opaque colour of its own.
+//
+// The combination this replaces was scene.background = 0x808080 with alpha
+// false, and it had two consequences. From any angle the backdrop was a flat
+// slab of grey at a fixed distance, so orbiting below the machine the ground
+// simply was not there - the view filled with the same grey the walls had and
+// the machine read as floating in a void. And because the backdrop was opaque,
+// every drop of black the geometry produced landed on grey, which is how the
+// rear panel's 16%-of-frame black came to read as a hole cut in the picture
+// rather than as shadow.
+//
+// scene.environment still comes from RoomEnvironment below, so the aluminium
+// has something to reflect. That is a LIGHTING source, not a backdrop, and it
+// does not draw.
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 renderer.localClippingEnabled = true;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// With nothing behind it the canvas would sit on the page's own background.
+// Stating it explicitly keeps the page background in charge if the CSS changes.
+renderer.setClearColor(0x000000, 0);
 viewport.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x808080);
+scene.background = null;
 
 // Generated environment: a metal at roughness 0.19 is a mirror, and a flat
 // background gives it nothing to reflect, which reads as matte plastic.
