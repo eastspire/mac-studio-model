@@ -262,8 +262,23 @@ def main():
     # empty space 3.8 mm in front of the panel and reports 0% open no matter
     # what the geometry says. So each face's own surface offset is computed
     # from the same fillet the loft used.
-    z_lo = S.GRILLE_BAND_Z0 + 0.04
-    z_hi = S.GRILLE_BAND_Z1 - 0.04
+    # The band is NOT at the spec's GRILLE_BAND_Z0..Z1.
+    #
+    # A hole cannot be drilled into the bottom fillet - the surface turns away
+    # from vertical there - so the builder puts the band on the wall ABOVE
+    # it, at FOOT_H + R_HORZ, and says in a comment that this disagrees with
+    # the photograph (the spec's 0.00..0.744 is where the band really is).
+    #
+    # This gate was measuring the spec range anyway, so 11 of its 14 z
+    # samples sat on solid metal by design and all four band rows read 0.0%
+    # open - reporting FAIL into exit 0, which is how it stayed invisible.
+    #
+    # The range now comes from S.BAND_Z0/BAND_Z1, the same constants the
+    # builder uses. That is the actual fix: the two files had separate
+    # arithmetic for the same quantity, and a third copy here would have been
+    # a fourth thing to forget to update.
+    z_lo = S.BAND_Z0 + 0.04
+    z_hi = S.BAND_Z1 - 0.04
     hxu = 8.0
     BODY_Z0, BODY_Z1 = S.FOOT_H, S.H_TOTAL
     # The band lives INSIDE the body's bottom fillet, so the surface is not

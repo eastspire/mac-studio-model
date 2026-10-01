@@ -643,7 +643,7 @@ cannot drift apart again.
 
 ## Errors this process found
 
-The ledger above (1–35) is the original run. This session added twelve more, all
+The ledger above (1–35) is the original run. This session added thirteen more, all
 of the same shape — a check that could not see the thing it claimed to measure:
 
 | # | Error | Size | How it hid |
@@ -660,6 +660,37 @@ of the same shape — a check that could not see the thing it claimed to measure
 | 45 | `verify.py` sized the **scene** against the chassis dimension | 0.85 mm false FAIL | The status LED is meant to stand 0.70 mm proud of the front skin and the power-button glyph 0.15 mm into the rear, so the scene envelope is legitimately 0.85 mm deeper than the chassis. The file's own docstring says what it is for — "a cutter's outer half got merged into the shell" — and the shell is `Body` (0.05 mm). A gate that reports FAIL for correct geometry will be disabled, and the real thing it is looking for is the offenders list right below it. |
 | 46 | `verify.py` printed `VERIFY_FAIL` and exited **0** | every failure | Blender does not propagate an uncaught Python exception to the process exit code. Measured on the bundled 4.5.4: `raise AttributeError(...)` → exit 0 with the traceback on stdout; `sys.exit(1)` → exit 1. So a gate that prints its verdict and falls off the end reports success to every shell, every `&&` chain and every CI step. Six gates had this shape — `build_mac_studio`, `ortho_measure`, `render_views`, `verify_ports`, `verify_ventilation`, `verify` — and the only reason any of them was ever caught is that a human read the output. |
 | 47 | `W_MM`/`H_MM` in `verify_spec.py` were literals nothing checked | 10 mm of depth | A mutation set the spec's `D` to 20.7 cm and both the spec self-test and `verify_spec.py` reported success: twenty port positions, a perforated field and five glyphs all still matched, because none of them depends on the machine being 19.7 cm deep. They are laid out on the *face*. The chassis envelope was never gated, and the constants every other measurement calibrates against were never held against the model. |
+| 48 | `verify_ventilation` measures a band the builder does not build there, and the band is blind anyway | whole gate | **Open, two independent causes.** The gate sampled the spec's `GRILLE_BAND_Z0..Z1` (z 0.04..0.704 cm) while the builder drills the band at `FOOT_H + R_HORZ` upward, because a hole cannot be opened into the bottom fillet. 11 of 14 z samples sat on solid metal by design. Fixed by sharing `S.BAND_Z0/BAND_Z1` between the two files. That alone did not fix it — see below. |
+| 49 | the base band's holes are blind pockets, not through-holes | 0.0% open on all four sides | **Open.** Even with the range corrected and the model freshly rebuilt, `crosses_skin` returns solid at 400 finely-spaced samples per row, and the rear cross-section through the band reads continuous from \|y\| 9.60 to 9.90 — a solid 3 mm slab where the holes should be. The band's perforation polygons sit at \|y\| = 9.55 while the skin is at 9.85, and `GRILLE_RECESS` is only 0.075 cm, so the 3 mm is not the intended recess. This is the front panel's bug again, in a different feature: a cutter that does not cross the wall. `build_mac_studio.py:1131` already names the likely cause and the intended fix — start the prism at the cavity floor, not at the skin, so neither cap is coplanar with anything — and the sweep at 1117–1121 shows the *start offset* is not the variable. What that comment does not do is say the band was ever verified as open, so it may never have been. |
+
+Errors 48 and 49 are the same lesson wearing two coats, and it is the
+lesson of 46 again: **a check that cannot see a thing is not a check.**
+
+For 48 the check could not see the band, because it was reading a different
+range than the one built. For 49 it can see the band and reports 0.0% — and
+it is right. The rear field on the same model measures 50.7% against a
+design 54.2%, through the same `crosses_skin`, in the same file, on the same
+run. So the method works; it is the band that is closed.
+
+What is established about 49:
+
+- **Established.** The holes exist as geometry. `Body` carries 42k–78k
+  polygons on each band row against 100–3,900 elsewhere, and they are laid
+  on a **1.39 mm** row pitch — not the spec's 0.906 mm, so the gate's duty
+  cycle of 7.5% is also the wrong target (the real figure is 4.9%, and
+  `TOLERANCE = 0.06` does not span the difference).
+- **Established.** They do not pass through. 400 samples per row across
+  8 mm, spaced finely enough to land inside a 1.28 mm hole, cross zero
+  clean. A section through the band at x ≈ 0 reads material continuously
+  from \|y\| 9.60 to 9.90.
+- **Ruled out.** A stale artifact. `mac_studio.blend` is gitignored, so
+  this was checked rather than assumed: a full rebuild reproduces 0.0%
+  exactly, and the freshly built model reports the same 50.7% rear field.
+- **Not established.** Which cap is coincident with what, and therefore
+  whether the fix is to move the prism's start to the cavity floor, to
+  deepen `span`, or to separate the band's recess from `GRILLE_RECESS`. Each
+  candidate needs a ~15-minute rebuild to evaluate, and the sweep already in
+  the file says the obvious variable is not the one that moved.
 
 Error 46 is the most expensive of the three and the least visible, because it
 disables the channel rather than lying in it. It is worth stating as a rule

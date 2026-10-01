@@ -1156,8 +1156,13 @@ def build_grilles(mats, body=None, span=0.0):
     # band's lower rows sit on the fillet, following it round, rather than on
     # a vertical wall - and a horizontal walk cannot express that at all. It
     # is the one part of the ventilation that is not modelled honestly yet.
-    band_z0 = FOOT_H + R_HORZ
-    band_z1 = band_z0 + 8 * GRILLE_PITCH_Z
+    # The range is S.BAND_Z0/BAND_Z1, shared with the ventilation
+    # gate: this used to be `FOOT_H + R_HORZ` and `+ 8 * GRILLE_PITCH_Z`
+    # written out here, and verify_ventilation kept its own copy of the spec's
+    # photographic range instead. The two drifted, the gate spent that time
+    # measuring solid metal, and it reported that into exit 0.
+    band_z0 = S.BAND_Z0
+    band_z1 = S.BAND_Z1
     print("  band  rows z %.3f..%.3f cm (fillet ends at %.3f; the spec puts "
           "the band at 0..%.3f)"
           % (band_z0, band_z1, band_z0, GRILLE_BAND_Z1))

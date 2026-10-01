@@ -148,6 +148,30 @@ GRILLE_BAND_Z1 = 0.744
 #                       not a lighting gradient
 GRILLE_PITCH_X = 0.1962     # 1.962 mm
 GRILLE_PITCH_Z = 0.0906     # 0.906 mm
+# WHERE THE BAND IS ACTUALLY DRILLED, which is not where it is on the
+# photograph.
+#
+# The bottom fillet is a quarter-round of R_HORZ from z=FOOT_H upward, so the
+# surface is turning away from vertical for the first 3.8 mm of the machine's
+# height and a hole cannot be opened into it: a prism fired horizontally at
+# z=0.3 mm shoots out through a surface that is already leaning away, and
+# the boolean either misses or leaves a slot.
+#
+# So the band is built on the vertical wall ABOVE the fillet, and the row
+# count is preserved. That is a real disagreement with the photographs -
+# GRILLE_BAND_Z0/Z1 above is where the band truly is, and a horizontal walk
+# cannot express a band that follows a fillet round. It is the one part of
+# the ventilation that is not modelled honestly.
+#
+# These two constants exist so the builder and the ventilation gate cannot
+# disagree about it again. They were separate arithmetic for the same
+# quantity for a while, and the gate spent that time reporting 0.0% open on
+# solid metal - into exit 0, so nothing surfaced it.
+BAND_Z0 = FOOT_H + R_HORZ                    # 0.580 cm
+BAND_Z1 = BAND_Z0 + 8 * GRILLE_PITCH_Z      # 1.305 cm
+BAND_ROWS = 8
+
+
 GRILLE_STAGGER = 0.0
 # Holes are obround, not circular. How big they are cannot be read off the
 # dark area alone: the band's dark class is the opening PLUS the shadow the
