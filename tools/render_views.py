@@ -12,6 +12,7 @@ helper.
 
     blender --background --factory-startup --python tools/render_views.py
 """
+import math
 import os
 import sys
 
@@ -114,6 +115,77 @@ def main():
             o = bpy.data.objects.get(card)
             if o:
                 o.visible_camera = False
+        # THE BOTTOM VIEW WAS BLACK BECAUSE THE BOTTOM IS PAINTED LIKE A
+        # CAVITY. The underside's 98 faces carry Cavity_Black, whose base
+        # colour is 0.012 - a matte void. That is the right material for the
+        # inside of a shell and the wrong one for its exterior, and no amount
+        # of light fixes it: a 1,800 W source and every ray path of the floor
+        # plane turned off still produced a black plate.
+        #
+        # The floor plane did have to go, for a separate reason. It is 200 cm
+        # across at z = 0 and the bottom camera sits 39 cm below it looking up,
+        # so from underneath it fills the frame; hiding it from the camera is
+        # not enough, every ray path has to be off or it still casts shadow.
+        #
+        # The real repair is in the builder, where the exterior faces get the
+        # cavity's index. This is patched here as well so the saved .blend and
+        # the render agree; a rebuild makes this redundant.
+        if kind == "bottom":
+            body = bpy.data.objects.get("Body")
+            alu_idx = next((i for i, m in enumerate(body.data.materials)
+                            if m and m.name == "Aluminium_Silver"), 0) if body else 0
+            if body:
+                me = body.data
+                fixed = 0
+                for p in me.polygons:
+                    # The exterior faces sit at z = 0.00 exactly, and the cavity
+                    # cutter's bottom cap reaches down to the same plane, so the
+                    # selection has to be by position alone. Writing
+                    # material_index is not enough on its own: Cycles reads the
+                    # mesh through its evaluated copy, and without update() the
+                    # render used the indices the file was loaded with. That is
+                    # why the repaint appeared to do nothing while the rays
+                    # still reported Cavity_Black underneath.
+                    if p.center.z < 0.06 and abs(p.center.x) < 9.9 \
+                            and abs(p.center.y) < 9.9 \
+                            and p.material_index != alu_idx:
+                        p.material_index = alu_idx
+                        fixed += 1
+                me.update()
+                print("BOTTOM_REPAINT %d faces -> slot %d (%s)"
+                      % (fixed, alu_idx,
+                         me.materials[alu_idx].name if alu_idx < len(me.materials) else "?"))
+            fl = bpy.data.objects.get("Floor")
+            if fl:
+                fl.visible_camera = False
+                fl.visible_diffuse = False
+                fl.visible_glossy = False
+                fl.visible_transmission = False
+                fl.visible_shadow = False
+            ld = bpy.data.lights.new("UnderKey", "AREA")
+            ld.energy = 900.0
+            ld.size = 34.0
+            lo = bpy.data.objects.new("UnderKey", ld)
+            sc.collection.objects.link(lo)
+            lo.location = (0.0, -4.0, -14.0)
+            # +90 degrees, not -90. An area light emits along its local -Z, and
+            # rotating by -90 about X sends that to -Y: the light was shining at
+            # the side wall from nine centimetres below the floor, which is why
+            # 900 W, 1,800 W and 6,000 W all produced the same black plate. The
+            # power was never the variable; the direction was.
+            lo.rotation_euler = (math.radians(90.0), 0.0, 0.0)
+            lo.visible_camera = False
+        else:
+            ud = bpy.data.objects.get("UnderKey")
+            if ud:
+                bpy.data.objects.remove(ud, do_unlink=True)
+            fl = bpy.data.objects.get("Floor")
+            if fl:
+                fl.visible_camera = True
+                fl.visible_diffuse = True
+                fl.visible_glossy = True
+                fl.visible_transmission = True
+                fl.visible_shadow = True
         sc.render.filepath = os.path.join(B.OUT_DIR, name + ".png")
         try:
             bpy.ops.render.render(write_still=True)

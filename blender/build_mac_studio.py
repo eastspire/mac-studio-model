@@ -508,6 +508,37 @@ def hollow_body(body, mats):
     boolean_diff(body, inner, "Hollow")
     print("  hollowed: %d verts  (wall %.2f mm, cutter %.1f x %.1f mm)"
           % (len(body.data.vertices), wall * 10, cut_x * 10, cut_y * 10))
+
+    # THE EXTERIOR MUST NOT WEAR THE CAVITY'S MATERIAL. A boolean difference
+    # hands the cutter's faces to the result, and the cutter here is
+    # Cavity_Black at base colour 0.012 - correct for the inside of a shell,
+    # wrong for its outside. The underside came out with 98 faces wearing it,
+    # so `06_bottom` rendered a matte black plate: no ventilation band, no
+    # feet, no edge, and no amount of light would have changed it, since
+    # 1,800 W and every ray path of the floor plane disabled still read black.
+    #
+    # The exterior is identified by position, because it is the simpler of
+    # the two to name: a face is exterior if it is within `wall` of the
+    # chassis's outer surface, and interior if it is deeper than that. The
+    # underside needs the margin - the cavity cutter's bottom cap reaches
+    # down to z = 0, so a strict test at FOOT_H leaves the base in the void.
+    me = body.data
+    fixed = 0
+    for p in me.polygons:
+        c = p.center
+        exterior = (
+            abs(c.x) > W / 2.0 - wall - 0.02
+            or abs(c.y) > D / 2.0 - wall - 0.02
+            or c.z > H_TOTAL - wall - 0.02
+            or c.z < FOOT_H + 0.02
+        )
+        if exterior and p.material_index != 0:
+            p.material_index = 0
+            fixed += 1
+    if fixed:
+        me.update()
+        print("  repainted %d exterior faces off Cavity_Black -> "
+              "Aluminium_Silver" % fixed)
     return body
 
 
