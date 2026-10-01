@@ -237,7 +237,9 @@ function buildWireframe(root) {
 // framing survives a change of model or of fov.
 // The named-view buttons are gone; the mouse drives the camera. This block
 // used to build them from a VIEWS table of [label, azimuth, elevation, framing
-// factor] rows, and flyTo() below is kept because the number keys still use it.
+// factor] rows. flyTo() and setViewImmediate() are kept - the opening shot
+// still needs a framing, and it now says 215/28/1.00 rather than indexing a
+// table that is no longer there.
 //
 // Worth keeping in the history: az 90 is the FRONT and az 270 the REAR, and
 // the two were swapped in this file exactly as they were in
@@ -246,6 +248,36 @@ function buildWireframe(root) {
 // deliberate. The symptom was the 背面 button flying to the smooth front
 // panel, so the one view that exists to show the ports and the perforated
 // field showed a blank face.
+/**
+ * The distance at which a sphere of the given radius exactly fills the frame.
+ *
+ * fitDistance() was defined immediately after the VIEWS table, and removing
+ * the table to take out the view buttons removed this with it - a cut from one
+ * anchor string to the next, which is exactly the edit that takes out more
+ * than it names. Both flyTo() and setViewImmediate() call it, and
+ * setViewImmediate() runs on load, so the page died with
+ * "fitDistance is not defined" before a single triangle was drawn.
+ *
+ * The radius is the model's own, so the framing tracks the export: the number
+ * is not a distance anyone tuned. The factor is a multiplier on it, below 1
+ * cropping into the object.
+ */
+function fitDistance(radius, factor) {
+  const vFov = THREE.MathUtils.degToRad(camera.fov);
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+  const limiting = Math.max(vFov, hFov);
+  return (radius / Math.sin(limiting / 2)) * factor;
+}
+
+// The camera tween, used by flyTo() and read every frame by the render loop.
+// It sat directly under the views button block and was removed with it, so
+// flyTo() assigned to a name that did not exist and the loop read another one
+// that did not exist either. The page reported
+//   模型加载失败 / tween is not defined
+// before drawing anything, because the opening shot calls setViewImmediate -
+// the same mistake twice in one file, from one cut.
+let tween = null;
+
 /** The model's bounding-sphere radius, once it has loaded. */
 function modelRadius() {
   return boxSize ? boxSize.length() / 2 : 0.2;
