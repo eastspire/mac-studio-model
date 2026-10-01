@@ -1625,10 +1625,28 @@ def build_front_io(mats, body):
     # inward, i.e. toward -Y
     y_mouth = y_face - 0.10
 
+    # THE CUTTER MISSED THE PANEL. cut_from_body() is given the cutter's CENTRE,
+    # and the front skin is at y = +D/2 = 9.85 with a 1.5 mm wall. The centre was
+    # y_face + 0.20 = 10.05 with a 0.60 total depth, so the cutter occupied
+    # y 9.75..10.35: it reached 0.10 mm past the skin and stopped, ten times
+    # short of the 1.5 mm it needed. Nothing was opened.
+    #
+    # Measured on the built shell, the front panel in the port strip (x -7.5 to
+    # -1.0, z 1.8 to 2.9) carried 17 faces larger than 0.05 cm2, the biggest
+    # 4.83 cm2, over a strip whose whole area is 7.15 cm2. Those are the panels
+    # the sockets were never cut out of, and the sockets themselves are separate
+    # geometry sitting just inside a closed skin - so the ports rendered as
+    # flat metal with a bright edge, which is what the viewer showed.
+    #
+    # The cutter now spans from outside the skin to past the wall, the same
+    # arrangement the grille fields use: it starts in free air in front of the
+    # panel and ends inside the cavity, so neither cap lands on a face.
+    span_in = WALL + 0.45
     for name, x, w, h in FRONT_PORTS:
-        cut_from_body(body, "Front_" + name, x, y_face + 0.20, IO_Z,
-                      w + 0.20, 0.60, h + 0.20, bevel=0.05, mats=mats)
-        paint_recess_black(body, y_face - 0.02, y_face + 0.58,
+        cut_from_body(body, "Front_" + name, x, y_face - span_in / 2.0, IO_Z,
+                      w + 0.20, span_in, h + 0.20, bevel=0.05, mats=mats)
+        # paint the recess black from the skin back to the socket's back plate
+        paint_recess_black(body, y_face - span_in - 0.02, y_face + 0.02,
                            abs(x) + w / 2.0 + 0.12, IO_Z - h / 2.0 - 0.12,
                            IO_Z + h / 2.0 + 0.12)
         # The socket's mouth sits just inside the panel and the body runs
