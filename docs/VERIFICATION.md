@@ -392,6 +392,19 @@ SKIP_RENDER=1 /Applications/Blender.app/Contents/MacOS/Blender --background \
   --python blender/export_gltf.py                             # EXPORTED docs/mac-studio.glb
 python3 tools/check_framing.py                                # FRAMING OK
 python3 tools/publish_assets.py --check                       # ALL ASSETS CURRENT
+
+# the front-panel gates. The first two take an argument so they can be pointed
+# at a revision that must fail; the third takes the URL to probe, which is how
+# the live site is checked rather than a local copy of it.
+Blender --background --factory-startup \
+  --python blender/check_front_cut.py                        # FRONT PANEL OPEN
+Blender --background --factory-startup \
+  --python blender/check_front_cut.py -- tmp/mac_studio.blend.pre-front-fix
+                                                           # exits 1, by design
+python3 tools/check_front_axes.py                            # AXES OK
+python3 tools/verify_front_ports.py                          # FRONT PORT CHECK PASSED
+python3 tools/verify_front_ports.py \
+  --url https://eastspire.github.io/mac-studio-model/viewer.html
 ```
 
 `check_blend.py` and `publish_assets.py --check` are the two that catch a
@@ -468,12 +481,194 @@ radius of peak |dI/dr|), not the 8.6 mm a connected-component bounding box
 reports: that box cannot tell a ring from a filled disc, so it read the gap
 *around* the button as part of the button.
 
+## The front panel was never cut, and the check that said it was could not see a cut
+
+`d5fd74e` shipped a fix titled "the front panel was never cut, so the ports were
+drawn on solid metal". The panel still was not cut, and the check that approved
+it was structurally incapable of noticing.
+
+**The bug.** `cut_from_body()` is given the cutter's CENTRE. d5fd74e used
+`span_in = WALL + 0.45` and centred it at `y_face - span_in/2`, which places
+the cutter across `y 9.25..9.85` — crossing the 1.5 mm wall, with its **outer
+cap exactly on the skin plane** at `y = 9.85`. On this shell a cutter cap
+finishing in the skin's own plane is read as a pocket and the skin survives.
+The comment above that line claimed "neither cap lands on a face"; the
+arithmetic three lines below it said the opposite. This is the same EXACT
+behaviour `build_grilles()` documents for the perforations, which is why those
+prisms overshoot the wall by half a centimetre.
+
+Measured coverage of each port's footprint by shell surface:
+
+| Port | Covered | Share |
+|---|---:|---:|
+| USBC_1 | 0.4257 of 0.4830 cm² | 88.1% |
+| USBC_2 | 0.4351 of 0.4935 cm² | 88.2% |
+| SDXC | 1.3268 of 1.3630 cm² | 97.3% |
+
+**Why the check passed.** It compared the total area of the shell's faces over
+the port strip against the strip's area. The boolean fragments the skin into
+thousands of small faces whose total comes out *below* the strip, so "CUT".
+Fragmented is not open — the two readings disagreed and the coverage number is
+the one that agrees with a ray.
+
+**The fix.** Overshoot the skin by `OUTSIDE` so the near cap is in free air in
+front of the panel, and reach `CAVITY` past the wall so the far cap is in the
+empty cavity behind it. Verified on the real shell before editing: the SDXC
+footprint went from 330/330 blocked to 0/330, and a ray down its middle landed
+on `Front_SDXC_tg` 2.42 mm in.
+
+## Three gates, each of which was itself wrong first
+
+A gate that has only ever been run against a good build has never been tested.
+Each of these is now checked against a revision that **must** fail.
+
+### `blender/check_front_cut.py` — rays, not a face census
+
+```
+blender --background --python blender/check_front_cut.py -- tmp/mac_studio.blend.pre-front-fix
+  USBC_1    602/602 = 100.0% capped
+  USBC_2    602/602 = 100.0% capped
+  SDXC     1904/1904 = 100.0% capped
+blender --background --python blender/check_front_cut.py
+  USBC_1      0/602 = 0.0% capped, socket 1.0-195.5 mm in
+  USBC_2      0/602 = 0.0% capped
+  SDXC        0/1904 = 0.0% capped
+```
+
+It takes a path argument **for that reason**. The first version ignored it, so
+pointing it at the pre-fix model printed a confident `FRONT PANEL OPEN`.
+
+Only the shell's own skin counts as a cap. `add_socket()` builds its walls
+*inside* the port's own footprint at 1.0 mm, because that is what a socket is;
+an earlier version called them a lid and reported 38–43% of every correctly
+built port capped. A gate that cannot tell a socket from a cap is measuring
+itself, and its output reads exactly like a finding.
+
+Controls in both directions, all three holding on the fixed model: the status
+LED (solid, `StatusLED` at −0.70 mm) and a blank panel patch (solid, `Body` at
+0.00 mm) must be stopped; the rear I/O row must still read open, which is what
+proves the instrument can see a cut at all.
+
+### `tools/check_front_axes.py` — measure the convention, don't remember it
+
+Front is **−Z**, height is **Y**, rear is **+Z**, read from the GLB's own JSON
+chunk. That convention was asserted backwards three separate times, in
+`render_views.py`, `ortho_measure.py` and `docs/viewer.js`, each time with a
+comment explaining why. It needs no browser and no Draco decode, so it runs in
+about a second and is worth running every time.
+
+It also reports the envelope: 19.7000 × 9.5000 × 19.7850 cm against Apple's
+19.70 × 9.50 × 19.70. The chassis is exact; the 0.85 mm overshoot is the LED
+lens standing proud of the skin and the power-button glyph, both of which are
+supposed to.
+
+### `tools/verify_front_ports.py` — the page-level probe
+
+This is the gate that was broken in the most instructive way, because it failed
+in two different directions and each failure looked like a model defect.
+
+**The readback was sampling a cleared buffer.** It used `gl.readPixels` on a
+context created without `preserveDrawingBuffer`, so a read scheduled outside the
+task that drew returned nothing. Every port came back at 91–198% of the bare
+panel's luma — no recess at all — while the raycast *against the same frame*
+correctly reported socket walls 1.2 mm behind the skin. Both numbers were real
+and they contradicted each other, which is the signature of a misaddressed
+read. It now draws the canvas into a 2D canvas in the same task, which is
+specified to snapshot the current contents.
+
+**One pixel is not a measurement of a port.** A USB-C socket's inner wall is
+*lit aluminium*. Sampling dead centre in the opening reads luma 107, where the
+bare panel 15 px away reads 108 — a correctly-modelled socket that looks
+exactly like a cap. What a real recess has, and a solid panel never does, is a
+**dark core**: a population of shadowed pixels. So the test is a fraction of a
+24 × 28 box, and the bare panel beside the ports is the control.
+
+| | dark core | of 725 px |
+|---|---:|---:|
+| USBC_1 | 19 | 49 |
+| USBC_2 | 19 | 62 |
+| SDXC | 0 | 103 |
+| **bare panel (control)** | 98 | **0** |
+
+A fraction, not an absolute luma, because an absolute number quietly becomes
+wrong when the page's exposure or tone mapping changes, and then fails on a
+model that did not change.
+
+Verified in both directions on the real served page:
+
+```
+# against d5fd74e's GLB
+FAIL  USBC_1:centre: the ray stops 0 mm behind the skin (Body_1). The panel is
+      NOT cut here - the ray reaches metal instead of the cavity. This is the
+      d5fd74e bug: a socket sitting behind an unbroken skin.
+   ... 6 of 6 probes
+FRONT PORT CHECK FAILED (6)
+
+# against the fixed GLB, locally and on Pages
+FRONT PORT CHECK PASSED - the front panel is cut; openings read as dark
+recesses, solid panel reads as metal
+```
+
+**The screenshot was a blank page.** It was captured on a second CDP connection
+*after* the reader task was cancelled, when the viewer's rAF loop had stopped
+painting. The PNG was 61% pure white with 1365 unique colours — the page's CSS
+gradient, no model on it — and it was filed as `renders/verify/front_elevation.png`,
+which is how a crop of it came to be "inspected" for ports that were never
+drawn. A blank PNG is worse than no PNG: it is filed as *the picture* and the
+next person trusts it. The picture now comes from the page's own canvas, so it
+is the same frame the luma numbers came from, and the run fails if it is more
+than 40% white.
+
+## The red gate nobody was reading
+
+`blender/verify_viewer.mjs` still asserted **8 named camera views** that
+`d574dcf` had deliberately removed. It had therefore been red since then, and a
+gate that is permanently red is a gate nobody reads — which is where both live
+bugs above were hiding, one commit apart.
+
+It now asserts what should be true rather than what a deleted table contained.
+Both new checks were mutation-tested: reintroducing the `0.42` framing factor
+fails, and the wrong axis fails. It scans **code, not comments**, because the
+comment recording the reset bug quotes the very call the check looks for, and
+matching it kept the check red for ever while the bug was fixed.
+
+## Reset zoomed to 42% of the fit
+
+`docs/viewer.js` reset called `flyTo(215, 28, 0.42)`. That third argument is a
+framing *factor*; `0.42` is the metre distance the deleted view table used to
+hold. So 重置 silently zoomed the camera to 42% of the fit instead of restoring
+the shot the page opens with. The opening azimuth, elevation and fit factor are
+now one set of constants shared by the initial shot and the reset, so they
+cannot drift apart again.
+
+## Errors this process found
+
+The ledger above (1–35) is the original run. This session added seven more, all
+of the same shape — a check that could not see the thing it claimed to measure:
+
+| # | Error | Size | How it hid |
+|---|---|---|---|
+| 36 | Front panel cutter cap landed on the skin plane | the whole port row | The face census called the fragmented skin "cut". Two readings disagreed; the coverage number (88–97%) agreed with a ray. |
+| 37 | `check_front_cut.py` ignored its own path argument | — | It had only ever been run against a good build, so it printed a confident PASS on the broken one. |
+| 38 | The same gate called the socket a cap | 38–43% of every port | `add_socket()` builds its walls inside the port's footprint at 1.0 mm. A gate that cannot tell a socket from a lid is measuring itself. |
+| 39 | `verify_front_ports.py` read a cleared drawing buffer | 91–198% of panel luma | `readPixels` with no `preserveDrawingBuffer`. The raycast on the same frame disagreed, which is the only reason it was caught. |
+| 40 | The same probe sampled one pixel at the port's centre | 107 vs a panel's 108 | A socket's inner wall is lit aluminium. A real recess has a dark *core*; one pixel cannot tell a lit wall from a lid. |
+| 41 | Its screenshot was a blank page | 61% white, 1365 colours | Captured on a second CDP connection after the render loop stopped, and filed as *the front elevation*. A blank PNG is worse than none: it is evidence. |
+| 42 | `verify_viewer.mjs` asserted 8 deleted camera views | the whole gate | Red since `d574dcf`, so nobody read it — which is where 36 and the reset bug were hiding, one commit apart. |
+
+The pattern across all of them is the same and it is worth stating once: **a
+gate that reports success without a control has measured nothing.** Six of
+these seven were gates, and every one of them passed on a model with a visible
+defect. The fixes were not better arithmetic — they were giving each gate
+something it must be able to fail on: a revision that is known broken, a
+socket that is supposed to be solid, a rear row that is known good, a panel
+that is known bare.
 
 ## Blender runs on this machine (earlier note retracted)
 
-> **Retracted.** This section claimed Blender 4.5.4 could not start in the
-> authoring sandbox and that the `.blend` on disk was therefore a stale
-> artefact. The crash was real for that sandbox, but **Blender runs here**:
+> The "Blender cannot start in the authoring sandbox" claim was **wrong for
+> this machine**. The crash was real for that sandbox, but **Blender runs
+> here**:
 >
 > ```bash
 > /Applications/Blender.app/Contents/MacOS/Blender --version   # 4.5.4 LTS
