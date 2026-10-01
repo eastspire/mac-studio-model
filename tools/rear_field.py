@@ -130,6 +130,49 @@ def check_open():
                                                          max(c[0] for c in centres))
 
 
+def check_floor():
+    """The underside, asked the same question on the floor plane at z = 0.
+
+    build_grille_floor() lays a square grid inset by FLOOR_INSET, so the probe
+    has to lay the same grid: hx = W/2 - FLOOR_INSET, a pitch of FLOOR_PITCH,
+    centres from x0 = -(cols-1)*pitch/2. The same trap as the rear lattice -
+    probe where the builder places, not where a round number falls.
+    """
+    me = bpy.data.objects["Body"].data
+    grid = defaultdict(list)
+    skin = 0
+    for p in me.polygons:
+        if abs(p.center.z) < TOL:
+            skin += 1
+            grid[(int(p.center.x / 0.05), int(p.center.y / 0.05))].append(
+                (p.center.x, p.center.y))
+
+    def covered(px, pz, r):
+        for i in range(int((px - r) / 0.05), int((px + r) / 0.05) + 1):
+            for j in range(int((pz - r) / 0.05), int((pz + r) / 0.05) + 1):
+                for (x, z) in grid.get((i, j), ()):
+                    if (x - px) ** 2 + (z - pz) ** 2 <= r * r:
+                        return True
+        return False
+
+    hx = S.W / 2.0 - S.FLOOR_INSET
+    hy = S.D / 2.0 - S.FLOOR_INSET
+    cols = max(1, int(2.0 * hx / S.FLOOR_PITCH))
+    rows = max(1, int(2.0 * hy / S.FLOOR_PITCH))
+    x0 = -(cols - 1) * S.FLOOR_PITCH / 2.0
+    y0 = -(rows - 1) * S.FLOOR_PITCH / 2.0
+    centres = []
+    for row in range(rows):
+        py = y0 + row * S.FLOOR_PITCH
+        for col in range(cols):
+            px = x0 + col * S.FLOOR_PITCH
+            if abs(px) > hx or abs(py) > hy:
+                continue
+            centres.append((px, py))
+    blocked = sum(1 for (x, y) in centres if covered(x, y, PROBE))
+    return len(centres), blocked, skin, rows, cols
+
+
 def main():
     if not os.path.exists(BLEND):
         print("no .blend at %s - run the builder first" % BLEND)
@@ -176,10 +219,25 @@ def main():
     open_ok = blocked == 0
 
     print()
+    print("2b. THE UNDERSIDE - the same question on the floor plane at z = 0")
+    f_total, f_blocked, f_skin, f_rows, f_cols = check_floor()
+    floor_ok = f_blocked == 0
+    print("   grid: %d rows x %d cols = %d holes, pitch %.3f cm, inset %.1f mm"
+          % (f_rows, f_cols, f_total, S.FLOOR_PITCH, S.FLOOR_INSET * 10))
+    print("   skin faces on the plane: %d" % f_skin)
+    print("   hole centres still covered: %d / %d" % (f_blocked, f_total))
+    print("   -> %.1f%% open" % (100.0 * (1.0 - f_blocked / max(1, f_total))))
+    print()
     print("3. VERDICT")
-    if env_ok and open_ok:
-        print("   PASS - the shell is intact and the field is open.")
+    if env_ok and open_ok and floor_ok:
+        print("   PASS - the shell is intact, the rear field is open and the")
+        print("          underside is perforated.")
         return 0
+    if env_ok and not floor_ok:
+        print("   FLOOR SHUT - the rear field is open but the underside is a")
+        print("                solid plate: %d of %d floor centres are covered."
+              % (f_blocked, f_total))
+        return 1
     if env_ok:
         print("   SHUT - the panel is intact and has no holes in it. Every one of")
         print("          the %d hole centres is still covered by the outer skin."

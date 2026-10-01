@@ -57,6 +57,7 @@ from mac_studio_spec import (            # noqa: E402,F401  (F401: re-exported)
     UPPER_PITCH_X, UPPER_PITCH_Z, UPPER_STAGGER, UPPER_HOLE_R,
     GRILLE_BAND_Z0, GRILLE_BAND_Z1, GRILLE_PITCH_X, GRILLE_PITCH_Z,
     GRILLE_STAGGER, GRILLE_HOLE_RX, GRILLE_HOLE_RZ, GRILLE_RECESS,
+    FLOOR_PITCH, FLOOR_HOLE_R, FLOOR_INSET,
     IO_Z, REAR_PORTS, AC_INLET_X, AC_INLET_W, AC_INLET_H,
     HEADPHONE_X, HEADPHONE_R, POWER_BTN_X, POWER_BTN_R, ICON_Z,
     POWER_BTN_GAP_W, POWER_BTN_GLYPH_R, POWER_BTN_GLYPH_W,
@@ -744,6 +745,80 @@ def build_grille_panel(mats, name, z_lo, z_hi, depth, pitch_x, pitch_z,
     return obj, placed
 
 
+def build_grille_floor(mats, name, depth, pitch, hole_r, span_from_floor=0.0,
+                       seg=8, max_holes=40000):
+    """A rectangular field of prisms through the FLOOR, on the underside.
+
+    The third of the three ventilation surfaces, and the reason this is not a
+    fourth call to build_grille_field.
+
+    build_grille_field walks a horizontal rounded-rectangle perimeter, so it
+    can only place a hole where the surface it walks is vertical at that z.
+    The underside is not: the bottom R_HORZ fillet is 3.8 mm deep, so a walk
+    below z 5.8 mm has a horizontal normal sitting on a surface curving away
+    underneath, and build_grilles() moved the band's lower rows up to
+    FOOT_H + R_HORZ to stay on a vertical wall. The spec has
+    GRILLE_BAND_Z0 = 0.00 - the band belongs on the floor.
+
+    The floor is FLAT with a known plane, z = 0, so it needs a grid and
+    prisms along +Z - the one direction neither of the other two builders can
+    produce. The prisms start `span_from_floor` BELOW the floor and run up
+    `depth` into the machine, so the near cap is in free air under the
+    chassis and the far cap is inside the cavity: neither cap lands on a face.
+    That is the arrangement the rear field uses, and it is why the rear field
+    opens while a prism whose far cap stops on the cavity wall does not.
+
+    The grid is inset by R_HORZ so no hole centre lands on the fillet, where a
+    +Z prism would leave the shell through a surface that is turning.
+    """
+    nring = seg
+    ring = [(math.cos(2.0 * math.pi * k / nring),
+             math.sin(2.0 * math.pi * k / nring)) for k in range(nring)]
+    half_x = W / 2.0 - FLOOR_INSET
+    half_y = D / 2.0 - FLOOR_INSET
+    cols = max(1, int(2.0 * half_x / pitch))
+    rows = max(1, int(2.0 * half_y / pitch))
+    x0 = -(cols - 1) * pitch / 2.0
+    y0 = -(rows - 1) * pitch / 2.0
+
+    verts, faces = [], []
+    placed = 0
+    for row in range(rows):
+        py = y0 + row * pitch
+        for col in range(cols):
+            if placed >= max_holes:
+                break
+            px = x0 + col * pitch
+            if abs(px) > half_x or abs(py) > half_y:
+                continue
+            base = len(verts)
+            for oz in (span_from_floor, span_from_floor + depth):
+                for ox, oy in ring:
+                    verts.append((px + ox * hole_r, py + oy * hole_r, oz))
+            for k in range(nring):
+                k2 = (k + 1) % nring
+                faces.append((base + k, base + k2,
+                              base + nring + k2, base + nring + k))
+            faces.append(tuple(base + k for k in range(nring)))
+            faces.append(tuple(base + nring + k for k in range(nring - 1, -1, -1)))
+            placed += 1
+
+    print("  %s: %d holes, %d rows x %d cols, pitch %.3f cm, hole %.3f cm"
+          % (name, placed, rows, cols, pitch, 2.0 * hole_r))
+    open_pct = 100.0 * math.pi * hole_r * hole_r / (pitch * pitch)
+    print("    %.1f%% open; with the rear field's 2760 that is %d total, against"
+          " Apple's published 'over 4,000 on the back and bottom'"
+          % (open_pct, placed + 2760))
+    me = bpy.data.meshes.new(name)
+    me.from_pydata(verts, [], faces)
+    me.validate()
+    obj = bpy.data.objects.new(name, me)
+    bpy.context.collection.objects.link(obj)
+    obj["hole_faces"] = nring + 2
+    obj["holes"] = placed
+    return obj, placed
+
+
 def build_grille_field(mats, name, z_lo, z_hi, recess, depth, pitch, hole_r,
                        mask_fn, seg=8, row_pitch=None, stagger=0.0,
                        max_holes=40000, hole_rz=None, span_from_floor=0.0):
@@ -1059,6 +1134,23 @@ def build_grilles(mats, body=None, span=0.0):
     print("  band  rows z %.3f..%.3f cm (fillet ends at %.3f; the spec puts "
           "the band at 0..%.3f)"
           % (band_z0, band_z1, band_z0, GRILLE_BAND_Z1))
+    # THE FLOOR GETS ITS OWN FIELD, CUT FIRST.
+    #
+    # The spec's band starts at z = 0, which is the underside, and a perimeter
+    # walk cannot place a hole there: the bottom fillet turns the surface away
+    # from vertical. So the floor is a grid of prisms along +Z, and the band's
+    # rows stay on the side wall where a horizontal walk is valid. Between them
+    # the spec's 0..0.744 cm is covered - the floor by this, the wall from 0.58.
+    #
+    # Cut order is a cost decision. EXACT's per-batch cost goes with the product
+    # of body faces and cutter faces, and every field cut makes the body bigger
+    # for the next one. The floor has 2,304 prisms where the rear field has
+    # 2,760, so it is cut first, against a body that has just been hollowed and
+    # has not yet absorbed the band and the field.
+    floor, n_floor = build_grille_floor(
+        mats, "FloorGrille", span, FLOOR_PITCH, FLOOR_HOLE_R,
+        span_from_floor=start, seg=8)
+
     band = build_grille_field(
         mats, "BaseGrille",
         band_z0, band_z1,
@@ -1093,6 +1185,9 @@ def build_grilles(mats, body=None, span=0.0):
     # the rear wall with the whole chassis gone, and the bbox audit reported
     # that as a 3.5 mm shortfall in Z rather than as the catastrophe it was.
     # Chunks keep every intersection local.
+    print("  cutting the floor field out of the shell ...")
+    cut_in_batches(body, floor, "FloorGrille")
+    report_stage(body, "after_floor")
     print("  cutting the base band out of the shell ...")
     cut_in_batches(body, band, "BaseGrille")
     report_stage(body, "after_band")
@@ -1561,50 +1656,22 @@ def build_bottom_cover(mats):
 
 
 def build_bottom_intake(mats):
-    """A lattice of intake holes across the bottom cover, drilled upward.
+    """REMOVED - and it should not be written back.
 
-    Apple's "over 4,000 perforations on the back and bottom" is the only
-    published count and it covers BOTH faces, so the split between them is not
-    published - and the rear field (3,038) plus the base band (3,104) already
-    exceed 4,000 on their own, so the count cannot be used to derive this
-    face's size either. It is placed to read as a real intake and is labelled
-    as the design choice it is, exactly as the fan bore already is.
+    This stood in for the underside's perforations: a lattice of extruded tubes
+    laid across BottomCover at z = FOOT_H, coloured with the dark grille
+    material so it would read as holes from a distance. It was never
+    subtracted from anything. It is a solid object shaped like a honeycomb
+    sitting on a solid plate, so the underside rendered as plain metal with a
+    fine dark texture and no openings behind that texture - exactly what
+    `06_bottom` showed, a featureless field with a dynamic range of 64/255.
+
+    The floor is a real plane the shell already has, and build_grille_floor()
+    drills it. A decal where a hole should be is worse than nothing: it makes
+    the render look right while the geometry stays shut, which is how this
+    file spent four builds reporting a perforated machine that was solid.
     """
-    ring = rounded_rect(max(GRILLE_HOLE_RX - GRILLE_HOLE_RZ, 1e-4),
-                        GRILLE_HOLE_RZ, GRILLE_HOLE_RZ, seg=4, edge_sub=1)
-    nring = len(ring)
-    half_x = W / 2.0 - R_VERT - 0.30
-    half_y = D / 2.0 - R_VERT - 0.30
-    depth = GRILLE_RECESS
-    verts, faces = [], []
-    placed = 0
-    cols = int(2 * half_x / GRILLE_PITCH_X)
-    rows_n = int(2 * half_y / GRILLE_PITCH_X)
-    for iy in range(rows_n):
-        for ix in range(cols):
-            x = -half_x + ix * GRILLE_PITCH_X
-            y = -half_y + iy * GRILLE_PITCH_X
-            base = len(verts)
-            # Two rings extruded UP from the cover's outer face into the
-            # enclosure. A hole is a tube along its own normal; building the
-            # ring in the (x, y) plane and pushing it along +Z is the same
-            # construction as build_grille_field, rotated to face down.
-            for oz in (0.0, depth):
-                for ox, oy in ring:
-                    verts.append((x + ox * GRILLE_HOLE_RX,
-                                  y + oy * GRILLE_HOLE_RZ,
-                                  FOOT_H + oz))
-            for k in range(nring):
-                k2 = (k + 1) % nring
-                faces.append((base + k, base + k2,
-                              base + nring + k2, base + nring + k))
-                faces.append((base + nring + k, base + nring + k2,
-                              base + k2, base + k))
-            placed += 1
-    obj = simple_mesh("BottomIntake", verts, faces, mats["grille"], smooth=True)
-    print("  BottomIntake: %d holes, pitch %.3f cm" % (placed, GRILLE_PITCH_X))
-    return obj
-
+    return None
 
 def build_bottom_details(mats):
     """Four rubber feet standing on the perforated bottom cover.
@@ -1947,7 +2014,6 @@ def main():
     report_stage(body, "rear_io")
     build_front_io(mats, body)
     build_bottom_cover(mats)
-    build_bottom_intake(mats)
     build_bottom_details(mats)
     report_stage(body, "bottom_io")
     build_internals(mats)

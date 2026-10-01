@@ -96,6 +96,26 @@ UPPER_PITCH = UPPER_PITCH_X          # kept for callers that want one number
 # photograph: its top edge is straight at 87.4-87.7 mm from the top across the
 # full width, and it runs to the bottom of the machine, so 0.0..0.744 cm above
 # the table. The old 0.70 put the top edge 0.44 mm low.
+# THE UNDERSIDE'S OWN FIELD. Apple publishes one number for the two faces
+# together - "over 4,000 perforations on the back and bottom" - so the split is
+# not published. The rear field is 2,760, which leaves the bottom somewhere
+# below 1,240 to keep the pair honest, and 2,304 is the square lattice nearest
+# the rear field's 45.8% open fraction: 48 x 48 at a 3.87 mm pitch with a 2.93
+# mm hole, 45.0% open, and 2,304 + 2,760 = 5,064, which satisfies the published
+# count rather than being derived from it.
+#
+# The earlier attempt used GRILLE_PITCH_X across the whole floor and got
+# 96 x 96 = 9,216 prisms at 13.6% open - 3.3x the rear field's face count for
+# a third of the openness, and a build that did not finish in 50 minutes. The
+# floor wants FEWER, LARGER holes at the same open fraction, not the band's
+# dense lattice: at 45% open a pitch of 0.387 cm is what the area requires.
+FLOOR_PITCH = 0.387
+FLOOR_HOLE_R = 0.1465
+# The floor is a flat plane, so the grid is inset from the edge by R_HORZ to
+# stay clear of the bottom fillet, where a +Z prism would shoot out through a
+# surface that is turning away underneath.
+FLOOR_INSET = R_HORZ
+
 GRILLE_BAND_Z0 = 0.00
 GRILLE_BAND_Z1 = 0.744
 # The band's lattice is a plain RECTANGULAR grid of obround holes: 1.962 mm
