@@ -1515,9 +1515,23 @@ def build_bottom_cover(mats):
     with the same obround lattice as the base band, and the four feet stand
     on it.
     """
-    return add_box("BottomCover", 0.0, 0.0, FOOT_H / 2.0,
-                   W - 2 * R_VERT, D - 2 * R_VERT, FOOT_H, mats["alu"],
-                   bevel=0.06)
+    # THE COVER MUST NOT REPEAT THE SHELL'S OWN FLOOR. This box's underside
+    # sat at z = 0.000, which is exactly where hollow_body() leaves the base of
+    # the shell: 98 Body faces and BottomCover's 309.76 cm2 bottom occupy the
+    # same plane. Two coincident surfaces is z-fighting, and it is why
+    # `06_bottom` rendered pure black (p50 = 0, a dynamic range of 1 out of
+    # 255) with a 900 W source aimed straight at it. Cycles picks between
+    # coincident faces and the result is not a lit surface at all.
+    #
+    # iFixit describes the bottom cover as a separate serviceable part, which
+    # it is - but "separate" means it is fastened under the extrusion, not
+    # that it is a second sheet of metal at the same height. It starts at the
+    # top of the shell's base rather than at its underside, so the two occupy
+    # different planes and the cover reads as the thin plate it is.
+    return add_box("BottomCover", 0.0, 0.0, FOOT_H / 2.0 + 0.01,
+                   W - 2 * R_VERT, D - 2 * R_VERT, FOOT_H - 0.02,
+                   mats["alu"],
+                   bevel=0.04)
 
 
 def build_bottom_intake(mats):
