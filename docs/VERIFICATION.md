@@ -662,6 +662,7 @@ of the same shape — a check that could not see the thing it claimed to measure
 | 47 | `W_MM`/`H_MM` in `verify_spec.py` were literals nothing checked | 10 mm of depth | A mutation set the spec's `D` to 20.7 cm and both the spec self-test and `verify_spec.py` reported success: twenty port positions, a perforated field and five glyphs all still matched, because none of them depends on the machine being 19.7 cm deep. They are laid out on the *face*. The chassis envelope was never gated, and the constants every other measurement calibrates against were never held against the model. |
 | 48 | `verify_ventilation` measures a band the builder does not build there, and the band is blind anyway | whole gate | **Open, two independent causes.** The gate sampled the spec's `GRILLE_BAND_Z0..Z1` (z 0.04..0.704 cm) while the builder drills the band at `FOOT_H + R_HORZ` upward, because a hole cannot be opened into the bottom fillet. 11 of 14 z samples sat on solid metal by design. Fixed by sharing `S.BAND_Z0/BAND_Z1` between the two files. That alone did not fix it — see below. |
 | 49 | the base band's holes are blind pockets, not through-holes | 0.0% open on all four sides | **Open.** Even with the range corrected and the model freshly rebuilt, `crosses_skin` returns solid at 400 finely-spaced samples per row, and the rear cross-section through the band reads continuous from \|y\| 9.60 to 9.90 — a solid 3 mm slab where the holes should be. The band's perforation polygons sit at \|y\| = 9.55 while the skin is at 9.85, and `GRILLE_RECESS` is only 0.075 cm, so the 3 mm is not the intended recess. This is the front panel's bug again, in a different feature: a cutter that does not cross the wall. `build_mac_studio.py:1131` already names the likely cause and the intended fix — start the prism at the cavity floor, not at the skin, so neither cap is coplanar with anything — and the sweep at 1117–1121 shows the *start offset* is not the variable. What that comment does not do is say the band was ever verified as open, so it may never have been. |
+| 50 | `mac_studio.blend` is gitignored, so no gate could tell whether the model it opened matched the builder | every `.blend`-based gate | **Fixed.** A build launched before a spec edit finished after it and overwrote the `.blend`, and nothing in the output said so — the model on disk was a product of a tree that no longer existed. The builder now writes a `BUILD_STAMP` text block into the file recording the spec's and its own mtime, and `verify_ventilation` reports `stamp spec current` / `STALE(...)` on every run. Editing a source without rebuilding now says so instead of quietly measuring the old model. |
 
 Errors 48 and 49 are the same lesson wearing two coats, and it is the
 lesson of 46 again: **a check that cannot see a thing is not a check.**
@@ -691,6 +692,27 @@ What is established about 49:
   deepen `span`, or to separate the band's recess from `GRILLE_RECESS`. Each
   candidate needs a ~15-minute rebuild to evaluate, and the sweep already in
   the file says the obvious variable is not the one that moved.
+- **Ruled out a second time.** The `.blend` was rebuilt after the range fix
+  and after this note was first written; 400 samples per row still cross
+  zero clean, at the same `|y| = 9.55`. The blind holes are not an artifact
+  of one build.
+
+### What error 49 was reached through
+
+Worth recording, because three of the first four hypotheses were wrong and
+each looked conclusive:
+
+| hypothesis | test | result |
+|---|---|---|
+| stale `.blend` (it is gitignored) | full rebuild | 0.0% exactly as before — **ruled out** |
+| the gate samples the wrong z range | compare the two files' arithmetic | real, 11 of 14 samples on solid metal — **fixed**, but 0.0% remained |
+| the z grid steps over the hole rows | 0.5 mm step vs 1.39 mm pitch | 7 of 13 samples land inside a row; not enough to explain 0.0% |
+| `surface_y` measures an interior point over a hole | print the walk | it returns exactly 9.8500 at every row — the skin, correct |
+| the band is on a surface the probe never aims at | section through the band | **it is**: perforation at `|y|` 9.55, skin at 9.85, material continuous 9.60–9.90 |
+
+The last one is the finding. The gate is not wrong about *where* it looks; it
+is reporting that the band is 3 mm of solid metal with a lattice of blind
+pockets machined into its inner face.
 
 Error 46 is the most expensive of the three and the least visible, because it
 disables the channel rather than lying in it. It is worth stating as a rule

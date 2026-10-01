@@ -81,6 +81,33 @@ import mac_studio_spec as S              # noqa: E402  (the glyph tables)
 OUT_DIR = os.path.join(_HERE, "..", "renders")
 BLEND = os.path.join(_HERE, "mac_studio.blend")
 
+
+def _stamp_build():
+    """Record which sources this .blend was built from, inside the .blend.
+
+    mac_studio.blend is gitignored, so it is an untracked artifact that every
+    gate reads. Nothing tied it to the code that produced it, and a gate that
+    opens it cannot tell a fresh model from one three edits out of date - so
+    a green run could be measuring anything. That is not hypothetical: a build
+    started before a spec edit and finished after it, overwriting the .blend
+    with geometry from a tree that no longer existed, and nothing in the
+    output said so.
+
+    mtimes are enough rather than a hash: they answer the only question that
+    matters, which is "is the code next to this file newer than the file".
+    Editing a source without rebuilding now makes every gate say STALE instead
+    of quietly reporting on the old model.
+    """
+    spec_path = os.path.join(_HERE, "mac_studio_spec.py")
+    txt = bpy.data.texts.get("BUILD_STAMP") or \
+        bpy.data.texts.new("BUILD_STAMP")
+    txt.clear()
+    txt.write("built_from: mac_studio.blend\n"
+              "spec_mtime: %d\n"
+              "builder_mtime: %d\n"
+              % (int(os.path.getmtime(spec_path)),
+                 int(os.path.getmtime(__file__))))
+
 problems = io_row_check()
 if problems:
     raise SystemExit("measured spec is self-inconsistent:\n  " +
@@ -2118,6 +2145,7 @@ def main():
     print("=" * 60)
 
     os.makedirs(OUT_DIR, exist_ok=True)
+    _stamp_build()
     bpy.ops.wm.save_as_mainfile(filepath=BLEND)
     if os.environ.get("SKIP_RENDER") == "1":
         print("BUILD_OK (render skipped)")

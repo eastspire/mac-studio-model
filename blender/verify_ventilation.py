@@ -48,6 +48,22 @@ from mathutils import Vector
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 BLEND = os.path.join(_HERE, "mac_studio.blend")
+# The two files whose content the .blend is a product of. mtimes of these
+# are what BUILD_STAMP records, so a gate can tell whether the artifact it
+# opened was built from the code sitting next to it.
+SPEC_PATH = os.path.join(_HERE, "mac_studio_spec.py")
+BUILDER_PATH = os.path.join(_HERE, "build_mac_studio.py")
+
+
+def _field(body, key):
+    """Read `key: <int>` out of the BUILD_STAMP text block."""
+    for line in body.splitlines():
+        if line.strip().startswith(key + ":"):
+            try:
+                return int(line.split(":", 1)[1].strip())
+            except ValueError:
+                return -1
+    return -1
 
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
@@ -191,6 +207,35 @@ def report(label, opened, total, expect, note=""):
 
 def main():
     bpy.ops.wm.open_mainfile(filepath=BLEND)
+    # IS THIS .blend EVEN BUILT FROM THE CURRENT BUILDER?
+    #
+    # mac_studio.blend is in .gitignore. It is a build artifact that every
+    # gate here reads and nothing tracks, so it can silently lag the builder
+    # and a green run means nothing. It bit this gate once already: a build
+    # launched before a spec edit finished after it, and the two were never
+    # reconciled - the build was started from a tree that no longer existed
+    # and nothing said so.
+    #
+    # The builder stamps the spec and its own mtime into the file when it
+    # saves. If the stamp is absent this is a pre-stamp model and the caller
+    # is told rather than left to assume. A gate that cannot tell what it is
+    # looking at is the error this whole ledger is about.
+    stamp = bpy.data.texts.get("BUILD_STAMP")
+    if stamp is None:
+        print("  STALE  no BUILD_STAMP in %s - this .blend predates the "
+              "stamp, so it cannot be shown to match the current builder"
+              % os.path.basename(BLEND))
+    else:
+        body = stamp.as_string()
+        got_spec = _field(body, "spec_mtime")
+        got_bld = _field(body, "builder_mtime")
+        want_spec = int(os.path.getmtime(SPEC_PATH))
+        want_bld = int(os.path.getmtime(BUILDER_PATH))
+        print("  stamp  spec %s  builder %s"
+              % ("current" if got_spec == want_spec else "STALE(%d != %d)"
+                 % (got_spec, want_spec),
+                 "current" if got_bld == want_bld else "STALE(%d != %d)"
+                 % (got_bld, want_bld)))
     hide_studio()
     dg = bpy.context.evaluated_depsgraph_get()
     sc = bpy.context.scene
