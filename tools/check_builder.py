@@ -131,6 +131,84 @@ def main():
         print("   spec self-test did not report SPEC_OK")
         bad += 1
 
+    # 5. every call into the builder from anywhere in blender/ must match the
+    #    builder's own signature.
+    #
+    #    This exists because `blender/verify.py` and `blender/build_trace.py`
+    #    both called `build_rear_io(mats)` after it gained a `body` parameter,
+    #    and every check above still reported CLEAN. They parse the BUILDER for
+    #    unbound names and for stray numeric literals; neither of those is
+    #    about a CALLER. A builder can be internally perfect and every entry
+    #    point into it can be broken, and the static check cannot see it because
+    #    it never reads the callers.
+    #
+    #    Both files failed on their first line of real work, the way the build
+    #    script itself did three commits before (see VERIFICATION.md, error 28).
+    #    The difference is that nothing imported them, so nothing noticed.
+    print("5. builder call sites vs. signatures:")
+    import glob
+    sigs = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            a = node.args
+            pos = [x.arg for x in a.posonlyargs + a.args]
+            sigs[node.name] = (pos, len(a.defaults))
+    # names a caller may legitimately reach that are not module-level defs:
+    # imported modules, and the builder's own module-level assignments.
+    helper_mods = {"os", "sys", "bpy", "math", "json", "importlib", "glob",
+                   "subprocess", "struct", "pathlib", "re", "time", "shutil"}
+    calls = 0
+    for path in sorted(glob.glob(os.path.join(BLENDER, "*.py"))):
+        if path == BUILDER:
+            continue
+        src2 = open(path).read()
+        try:
+            t2 = ast.parse(src2)
+        except SyntaxError as e:
+            print("   SYNTAX ERROR %s: %s" % (os.path.basename(path), e))
+            bad += 1
+            continue
+        # what this file itself defines or imports, so `bld.foo` and local
+        # helpers are not mistaken for builder functions
+        local = set(helper_mods)
+        for n2 in ast.walk(t2):
+            if isinstance(n2, (ast.FunctionDef, ast.ClassDef)):
+                local.add(n2.name)
+            elif isinstance(n2, ast.Import):
+                for a2 in n2.names:
+                    local.add((a2.asname or a2.name).split(".")[0])
+            elif isinstance(n2, ast.ImportFrom):
+                for a2 in n2.names:
+                    local.add(a2.asname or a2.name)
+            elif isinstance(n2, ast.Name) and isinstance(n2.ctx, ast.Store):
+                local.add(n2.id)
+        for node in ast.walk(t2):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            # only calls THROUGH the builder module: bld.foo(...)
+            if not (isinstance(f, ast.Attribute) and
+                    isinstance(f.value, ast.Name) and
+                    f.value.id in {"bld", "build", "builder"}):
+                continue
+            name = f.attr
+            calls += 1
+            if name not in sigs:
+                if name not in local:
+                    print("   UNKNOWN %s:%d  bld.%s() is not a builder function"
+                          % (os.path.basename(path), node.lineno, name))
+                    bad += 1
+                continue
+            pos, ndef = sigs[name]
+            required = len(pos) - ndef
+            if len(node.args) < required:
+                print("   ARITY %s:%d  bld.%s() called with %d, needs %d"
+                      % (os.path.basename(path), node.lineno, name,
+                         len(node.args), required))
+                bad += 1
+    print("   %d call site(s) checked against %d builder signatures"
+          % (calls, len(sigs)))
+
     print("\n%s" % ("STATIC CHECK CLEAN" if bad == 0
                     else "STATIC CHECK FOUND %d PROBLEM(S)" % bad))
     return 1 if bad else 0

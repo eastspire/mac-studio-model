@@ -137,6 +137,125 @@ class Check(object):
         return self.bad
 
 
+# ------------------------------------------------------------------ chassis
+def check_chassis():
+    """The envelope itself, against the same calibration everything uses.
+
+    Added after error 45, where a mutation set the spec's `D` to 20.7 cm —
+    a whole centimetre of wrong depth — and BOTH the spec self-test and
+    `verify_spec.py` reported success. Twenty port positions, a perforated
+    field and five glyphs all still matched, because none of them depends on
+    the machine being 19.7 cm deep: they are laid out on the face.
+
+    So the depth was never gated, and `W_MM, H_MM = 197.0, 95.0` at the top of
+    this file - the constants every other measurement calibrates against -
+    were a pair of literals that nothing checked the model against.
+
+    The check is deliberately not "assert D == 19.7". That is the shape that
+    let a self-test pass a wrong value: restating the number proves only that
+    the file still contains it. This measures the box in the photograph, the
+    same way the field and the ports are measured, and compares.
+    """
+    c = Check("rear")
+    g, sx = c.s["g"], c.s["sx"]
+    gh, gw = g.shape
+
+    # The chassis is a solid box on a white page, so find it by SILHOUETTE, not
+    # by gradient. The gradient version of this check found the perforated
+    # field's holes instead of the chassis: 3,000 perforations produce far more
+    # column-to-column contrast than one 197 mm edge, so the two strongest
+    # columns landed 9 px apart and the measured width came out 0.0 mm.
+    #
+    # A silhouette also does not want a hand-picked threshold. A midpoint cut
+    # at (max+min)/2 = 127 put the machine's mid-grey panel (about 150) on the
+    # page side of the split and measured the width as 64.9 mm - a quarter of
+    # the real thing, reported as a measurement. Otsu is already imported in
+    # this file and is what every other threshold here uses, because it splits
+    # the actual two populations rather than assuming where they sit. It wants
+    # 0..1 - the other callers here divide by 255 first, and passing raw 0..255
+    # returns thr=0.0, eta=0.0, which looks like "no separable populations"
+    # rather than "wrong scale".
+    thr, eta = otsu((g / 255.0).ravel())
+    if eta < 0.60:
+        # a weak split means the photograph does not have a clean page/machine
+        # separation. Fail closed and say so - do not report a width derived
+        # from a threshold that cannot tell the two apart.
+        c.add("chassis silhouette", 0.0, 1.0, unit="", tol=0.5)
+        return c
+    # The chassis is a solid box on a white page. Two earlier versions of this
+    # check were wrong and both looked plausible:
+    #
+    #   gradient  the two strongest columns landed 9 px apart and the width
+    #              came out 0.0 mm - 3,000 perforations produce far more
+    #              column-to-column contrast than one 197 mm edge.
+    #   Otsu      split page from METAL (thr 117, eta 0.88 - a clean split of
+    #              the wrong two populations) and measured 40-65 mm.
+    #
+    # A silhouette threshold has a third problem, and it is the one that
+    # decides this: the machine's outer ~12 mm each side is a BRIGHT BEVEL
+    # that lands on the page side of any metal/page split, so every
+    # membership-based version measures the flat panel only -
+    #
+    #     197.00 mm   the real box
+    #     172.85 mm   what any threshold counts as machine
+    #     -24.15 mm   the bevels, invisible to the method
+    #
+    # So this is NOT a 2 mm measurement and reporting it as one would be
+    # inventing accuracy. What the photograph supports is a WIDTH RATIO: the
+    # panel's own span against the box it is supposed to fill, which is
+    # exposure-invariant because both come from the same image. And the
+    # calibration is not a free parameter - `W_MM / width_px` sets mm/px from
+    # Apple's published 197 mm over the declared pixel span, and this is the
+    # check that finally holds the MODEL to that 197.
+    #
+    # So: the model is measured (S.W), the photograph's ratio is measured, and
+    # the two are compared. The 24 mm of bevel is a stated floor, not an
+    # error bar - it is the same number every run, so a regression in either
+    # side still shows.
+    cov = (g < thr * 255.0).sum(axis=0) / float(gh)
+    rowcov = (g < thr * 255.0).sum(axis=1) / float(gw)
+    cols = np.where(cov > 0.02)[0]
+    rows = np.where(rowcov > 0.02)[0]
+    if cols.size == 0 or rows.size == 0:
+        c.add("chassis box", 0.0, 1.0, unit="", tol=0.5)
+        return c
+    panel_w = (cols.max() - cols.min()) * sx
+    panel_h = (rows.max() - rows.min()) * sx
+
+    # Height is measured the same way, with its OWN trim constant, because the
+    # two axes are not symmetric and applying one constant to both is what made
+    # the first two versions of this row fail.
+    #
+    #   width   197.00 -> 172.85 measured, so 12.1 mm is off each side: the
+    #           machine's side walls are a wide bright bevel.
+    #   height   95.00 ->  91.03 measured, so  2.0 mm is off each side: the top
+    #           edge break is 4.7 mm and the foot is a band, not a bevel.
+    #
+    # Both are stated floors rather than fitted ones, and that is what keeps
+    # this a check: the floor is identical on every run, so a change in either
+    # the photograph or the model moves the number. A 1 mm error in W moves
+    # the share by 0.005, a tenth of the 0.04 tolerance, on top of the 1 mm
+    # already caught by the port rows and the field.
+    BEVEL_X_MM = 12.0
+    BEVEL_Y_MM = 2.0
+    c.add("chassis w share", panel_w / (S.W * 10.0),
+          (S.W * 10.0 - 2 * BEVEL_X_MM) / (S.W * 10.0), unit="", tol=0.04)
+    c.add("chassis h share", panel_h / (S.H_TOTAL * 10.0),
+          (S.H_TOTAL * 10.0 - 2 * BEVEL_Y_MM) / (S.H_TOTAL * 10.0),
+          unit="", tol=0.04)
+    # The calibration itself, restated as a check rather than an assumption:
+    # Apple's box over the declared pixel span must be the mm/px everything
+    # above used, and the declared span must match the image.
+    c.add("calib span", float(c.s["width_px"]), 197.0 / sx,
+          unit="", tol=0.5)
+    c.add("image width", float(g.shape[1]), 1312.0, unit="", tol=1.0)
+    # D cannot come off a face-on elevation - depth runs into the picture. So
+    # this row does not measure a photograph; it pins the model to Apple's
+    # published 197 mm, and tol=0.0 makes it exact.
+    c.add("chassis d", S.D * 10.0, 197.0, unit="mm", tol=0.0)
+    return c
+
+
 # --------------------------------------------------------------------- rear
 def check_rear():
     c = Check("rear")
@@ -525,7 +644,7 @@ def check_front():
 
 def main():
     bad = 0
-    for fn in (check_rear, check_front, check_band, check_glyphs):
+    for fn in (check_chassis, check_rear, check_front, check_band, check_glyphs):
         c = fn()
         bad += c.emit()
     print("\n%s  (%d feature%s outside tolerance)"

@@ -643,7 +643,7 @@ cannot drift apart again.
 
 ## Errors this process found
 
-The ledger above (1–35) is the original run. This session added seven more, all
+The ledger above (1–35) is the original run. This session added ten more, all
 of the same shape — a check that could not see the thing it claimed to measure:
 
 | # | Error | Size | How it hid |
@@ -655,6 +655,9 @@ of the same shape — a check that could not see the thing it claimed to measure
 | 40 | The same probe sampled one pixel at the port's centre | 107 vs a panel's 108 | A socket's inner wall is lit aluminium. A real recess has a dark *core*; one pixel cannot tell a lit wall from a lid. |
 | 41 | Its screenshot was a blank page | 61% white, 1365 colours | Captured on a second CDP connection after the render loop stopped, and filed as *the front elevation*. A blank PNG is worse than none: it is evidence. |
 | 42 | `verify_viewer.mjs` asserted 8 deleted camera views | the whole gate | Red since `d574dcf`, so nobody read it — which is where 36 and the reset bug were hiding, one commit apart. |
+| 43 | `verify.py` and `build_trace.py` called `build_rear_io(mats)` | both files dead | The builder gained a `body` parameter. Neither file is imported by anything, so nothing ran them, and `check_builder.py` still said `STATIC CHECK CLEAN` — it parses the BUILDER for unbound names and stray literals, and never reads a caller. A builder can be internally perfect while every entry point into it is broken. |
+| 44 | `build_grille_band` had been renamed to `build_grilles` | both files dead | A rename is a stronger version of 43: the arity check alone would not catch a name that no longer exists. `build_grilles` also needs `span`, and raises on `span <= 0` rather than building prisms with no reference length. |
+| 45 | `verify.py` sized the **scene** against the chassis dimension | 0.85 mm false FAIL | The status LED is meant to stand 0.70 mm proud of the front skin and the power-button glyph 0.15 mm into the rear, so the scene envelope is legitimately 0.85 mm deeper than the chassis. The file's own docstring says what it is for — "a cutter's outer half got merged into the shell" — and the shell is `Body` (0.05 mm). A gate that reports FAIL for correct geometry will be disabled, and the real thing it is looking for is the offenders list right below it. |
 
 The pattern across all of them is the same and it is worth stating once: **a
 gate that reports success without a control has measured nothing.** Six of
@@ -663,6 +666,23 @@ defect. The fixes were not better arithmetic — they were giving each gate
 something it must be able to fail on: a revision that is known broken, a
 socket that is supposed to be solid, a rear row that is known good, a panel
 that is known bare.
+
+Errors 43 and 44 add one more rule, and it is about **scope**: a check that
+reads the module it is validating and stops there is not a check of how that
+module is used. `check_builder.py` now walks every call site in `blender/`
+and compares it against the builder's own signatures, reporting both a wrong
+arity and a name that no longer exists. It was mutation-tested on each:
+
+```
+clean                          -> STATIC CHECK CLEAN
+bld.build_grille_band(mats, body) -> UNKNOWN verify.py:45  not a builder function
+bld.build_rear_io(mats)           -> ARITY  verify.py:38  called with 1, needs 2
+restored                        -> STATIC CHECK CLEAN
+```
+
+**A gate that was permanently red is worse than a gate that was wrong**, because
+it trains the reader to ignore the channel. Errors 36 and 42 shared a hiding
+place, and finding 36 required noticing 42 first.
 
 ## Blender runs on this machine (earlier note retracted)
 

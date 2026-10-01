@@ -32,13 +32,16 @@ def rep(tag):
 
 
 rep("fresh")
-bld.build_rear_io(mats)
+bld.build_rear_io(mats, body)
 rep("after rear_io")
 bld.build_front_io(mats, body)
 rep("after front_io")
 bld.build_bottom_details(mats)
 rep("after bottom")
-bld.build_grille_band(mats, body)
+# build_grille_band was renamed to build_grilles, which also needs the span:
+# it raises on span <= 0 rather than silently building the prisms with no
+# reference length. Same value the build itself uses.
+bld.build_grilles(mats, body, bld.WALL + 0.45)
 rep("after grille")
 
 print("--- per-object offenders (|coord| > 9.85) ---")
