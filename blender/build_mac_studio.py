@@ -1856,6 +1856,13 @@ VIEWS = [
 ]
 
 TARGETS = {
+    # `06_bottom` had no entry, so it fell back to the chassis centre at
+    # z = H_TOTAL/2 = 4.75 cm. From el = -88 and 44 cm out the camera sits at
+    # z = -39.3 and looks AT z = 4.75: straight through the entire body, with
+    # the shell in the way. Every pixel came back 89..153, a dynamic range of
+    # 64 out of 255, with no silhouette and no background. The target for an
+    # underside view is the underside.
+    "06_bottom": (0.0, 0.0, 0.0),
     # Closeup camera targets. +Y is the front (USB-C, SDXC, LED) and -Y is the
     # rear (the I/O row and the exhaust field); these were all on +Y, so the
     # "rear closeup" framed the front.
