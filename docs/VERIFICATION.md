@@ -643,7 +643,7 @@ cannot drift apart again.
 
 ## Errors this process found
 
-The ledger above (1–35) is the original run. This session added ten more, all
+The ledger above (1–35) is the original run. This session added twelve more, all
 of the same shape — a check that could not see the thing it claimed to measure:
 
 | # | Error | Size | How it hid |
@@ -658,6 +658,51 @@ of the same shape — a check that could not see the thing it claimed to measure
 | 43 | `verify.py` and `build_trace.py` called `build_rear_io(mats)` | both files dead | The builder gained a `body` parameter. Neither file is imported by anything, so nothing ran them, and `check_builder.py` still said `STATIC CHECK CLEAN` — it parses the BUILDER for unbound names and stray literals, and never reads a caller. A builder can be internally perfect while every entry point into it is broken. |
 | 44 | `build_grille_band` had been renamed to `build_grilles` | both files dead | A rename is a stronger version of 43: the arity check alone would not catch a name that no longer exists. `build_grilles` also needs `span`, and raises on `span <= 0` rather than building prisms with no reference length. |
 | 45 | `verify.py` sized the **scene** against the chassis dimension | 0.85 mm false FAIL | The status LED is meant to stand 0.70 mm proud of the front skin and the power-button glyph 0.15 mm into the rear, so the scene envelope is legitimately 0.85 mm deeper than the chassis. The file's own docstring says what it is for — "a cutter's outer half got merged into the shell" — and the shell is `Body` (0.05 mm). A gate that reports FAIL for correct geometry will be disabled, and the real thing it is looking for is the offenders list right below it. |
+| 46 | `verify.py` printed `VERIFY_FAIL` and exited **0** | every failure | Blender does not propagate an uncaught Python exception to the process exit code. Measured on the bundled 4.5.4: `raise AttributeError(...)` → exit 0 with the traceback on stdout; `sys.exit(1)` → exit 1. So a gate that prints its verdict and falls off the end reports success to every shell, every `&&` chain and every CI step. Six gates had this shape — `build_mac_studio`, `ortho_measure`, `render_views`, `verify_ports`, `verify_ventilation`, `verify` — and the only reason any of them was ever caught is that a human read the output. |
+| 47 | `W_MM`/`H_MM` in `verify_spec.py` were literals nothing checked | 10 mm of depth | A mutation set the spec's `D` to 20.7 cm and both the spec self-test and `verify_spec.py` reported success: twenty port positions, a perforated field and five glyphs all still matched, because none of them depends on the machine being 19.7 cm deep. They are laid out on the *face*. The chassis envelope was never gated, and the constants every other measurement calibrates against were never held against the model. |
+
+Error 46 is the most expensive of the three and the least visible, because it
+disables the channel rather than lying in it. It is worth stating as a rule
+for this repo:
+
+**A Blender-side gate is only a gate if it calls `sys.exit` explicitly.**
+Blender's `--python` runs the script and exits 0 regardless of what happened.
+Verified on the bundled 4.5.4:
+
+| what the script does | process exit |
+|---|---|
+| `raise AttributeError(...)` | **0** |
+| `sys.exit(1)` | 1 |
+| `sys.exit(0)` | 0 |
+
+All six gates now return a code from `main()` and the module-level wrapper
+forwards it. The verdict *line* is for a human; the status is for everything
+else.
+
+Error 47 needed a measurement that does not exist in the reference. Three
+methods were tried and each produced a plausible-looking wrong number, which
+is why the shape is commented and not just the result:
+
+| method | measured | why it is wrong |
+|---|---:|---|
+| strongest column gradient | **0.0 mm** | 3,000 perforations out-contrast one 197 mm edge; the two strongest columns land 9 px apart |
+| Otsu on the whole frame | **40–65 mm** | splits *page from metal*, not machine from page (thr 117, eta 0.88 — a clean split of the wrong two populations) |
+| any metal/page threshold | **172.85 mm** | the outer ~12 mm each side is a bright bevel on the page side of any such split; the real box is 197.00 |
+
+The working form is a **share of the box**, with the silhouette's own trim
+stated rather than fitted — 12.1 mm a side in X, 2.0 mm a side in Y, because
+the axes are not symmetric and applying one constant to both is what made the
+first two versions of that row fail. The floor is constant, so a change in
+either the photograph or the model still moves the number. Verified on each
+axis independently:
+
+```
+clean            -> 0 features outside tolerance
+W = 20.7         -> FAIL
+D = 20.7         -> FAIL
+H_TOTAL = 10.5   -> FAIL
+restored         -> 0 features outside tolerance
+```
 
 The pattern across all of them is the same and it is worth stating once: **a
 gate that reports success without a control has measured nothing.** Six of

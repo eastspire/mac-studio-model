@@ -351,8 +351,25 @@ def main():
 
     print("\n%s (%d failures)"
           % ("VENT_OK" if not fails else "VENT_FAIL", fails))
-    return fails
+    # 0/1, not the count: the wrapper at the bottom of this file forwards
+    # main()'s return value straight to sys.exit, and a count is a valid
+    # non-zero status but reads as "failed 3 ways" nowhere except here.
+    return 0 if not fails else 1
 
 
+
+
+# Blender does NOT propagate an uncaught Python exception to the process exit
+# code - measured on the bundled 4.5.4, `raise` exits 0 with the traceback on
+# stdout, and only an explicit sys.exit(1) is a non-zero status. A gate that
+# prints its verdict and falls off the end therefore reports SUCCESS to every
+# shell, every `&&` chain and every CI step, and the only thing that catches
+# it is a human reading the output.
+#
+# The verdict line above is the human-readable one; this is the machine one.
 if __name__ == "__main__":
-    main()
+    # main() raises on failure, and Blender swallows that into exit 0,
+    # so the verdict is turned into a status here, in the one place
+    # that is guaranteed to run.
+    _code = main()
+    sys.exit(_code if isinstance(_code, int) else 0)

@@ -185,7 +185,22 @@ def main():
               % (name, tuple(round(v, 1) for v in cam.location),
                  (cam.location - Vector(target)).length))
     print("RENDER_ALL_OK")
+    return 0
 
 
+
+
+# Blender does NOT propagate an uncaught Python exception to the process exit
+# code - measured on the bundled 4.5.4, `raise` exits 0 with the traceback on
+# stdout, and only an explicit sys.exit(1) is a non-zero status. A gate that
+# prints its verdict and falls off the end therefore reports SUCCESS to every
+# shell, every `&&` chain and every CI step, and the only thing that catches
+# it is a human reading the output.
+#
+# The verdict line above is the human-readable one; this is the machine one.
 if __name__ == "__main__":
-    main()
+    # main() raises on failure, and Blender swallows that into exit 0,
+    # so the verdict is turned into a status here, in the one place
+    # that is guaranteed to run.
+    _code = main()
+    sys.exit(_code if isinstance(_code, int) else 0)

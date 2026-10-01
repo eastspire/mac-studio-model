@@ -24,6 +24,7 @@ actually says whether a cutter leaked, and it names each object.
 """
 import importlib.util
 import os
+import sys
 
 import bpy
 from mathutils import Vector
@@ -110,3 +111,20 @@ for obj in bpy.context.scene.objects:
 print("  %d object(s) proud of the +/-9.851 skin" % len(offenders))
 print("  (informational: see the comment above - the verdict is the shell SIZE)")
 print("VERIFY_OK" if ok else "VERIFY_FAIL")
+
+# sys.exit, and it matters more here than anywhere else in this repo.
+#
+# Blender does NOT propagate an uncaught Python exception to the process exit
+# code. Measured on the bundled 4.5.4:
+#
+#     raise AttributeError(...)   -> exit 0, traceback on stdout
+#     sys.exit(1)                 -> exit 1
+#     sys.exit(0)                 -> exit 0
+#
+# So a gate that prints VERIFY_FAIL and falls off the end reports SUCCESS to
+# every shell, every `&&` chain and every CI step. This file did exactly that,
+# and the only reason it was caught is that a human read the output. The one
+# run of it in this session that actually failed - build_grille_band renamed
+# out from under it - also exited 0, with the traceback sitting in the file
+# next to "EXIT=0".
+sys.exit(0 if ok else 1)
