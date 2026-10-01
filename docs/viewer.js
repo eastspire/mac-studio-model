@@ -104,25 +104,19 @@ floor.position.y = -0.0001;
 floor.receiveShadow = true;
 scene.add(floor);
 
-const grid = new THREE.GridHelper(1.2, 24, 0x606060, 0x8a8a8a);
-grid.position.y = 0.0002;
-grid.material.transparent = true;
-grid.material.opacity = 0.35;
-grid.visible = false;
-scene.add(grid);
+
 
 // ------------------------------------------------------------------- model
 const modelRoot = new THREE.Group();
 scene.add(modelRoot);
 
-const parts = { grille: [], ports: [], feet: [] };
+const parts = { ports: [], feet: [] };
 const aluMaterials = new Set();
 let wireGroup = null;
 let boxSize = null;
 
 /** Classify a node by name so the visibility toggles can address it. */
 function classify(name) {
-  if (/Grille/i.test(name)) return 'grille';
   if (/^Port_|^Front_|^RearBay/.test(name)) return 'ports';
   if (/^Foot_|^Power/.test(name)) return 'feet';
   return null;
@@ -152,7 +146,7 @@ loader.load(
     // Frame the opening shot from the box we just measured, using the same
     // fit every preset button uses. Without this the camera keeps whatever
     // position it was constructed with, and that number predates the model.
-    setViewImmediate(...VIEWS[0].slice(1));
+    setViewImmediate(215, 28, 1.00);
 
     root.traverse((o) => {
       if (!o.isMesh) return;
@@ -241,47 +235,17 @@ function buildWireframe(root) {
 // an earlier 84-mesh export and were never re-derived. It is now a factor
 // applied to the distance that actually fits the loaded bounding box, so the
 // framing survives a change of model or of fov.
-const VIEWS = [
-  ['3/4 透视',  215, 28, 1.00],
-  ['正面',       90,  8, 1.00],
-  ['侧面',      180,  6, 1.00],
-  ['背面',      270,  8, 1.00],
-  ['顶视',       90, 78, 1.00],
-  // -78, not -62: at -62 the camera is still well above the horizon, so this
-  // showed the base band edge-on instead of the perforated bottom cover.
-  ['底视',       90, -78, 1.00],
-  // the two close-ups deliberately sit inside the object, so their factors
-  // are well below 1 - they are meant to crop.
-  ['前脸特写',   90,  4, 0.62],
-  ['接口特写',  270, 14, 0.68],
-];
-
-/**
- * The distance at which a box of the given size exactly fills the frame.
- * Derived from the model's own bounding box, so it tracks the export.
- */
-function fitDistance(radius, factor) {
-  const vFov = THREE.MathUtils.degToRad(camera.fov);
-  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
-  const limiting = Math.max(vFov, hFov);
-  return (radius / Math.sin(limiting / 2)) * factor;
-}
-
-const viewsEl = document.getElementById('views');
-let tween = null;
-
-VIEWS.forEach(([label, az, el, factor], i) => {
-  const b = document.createElement('button');
-  b.className = 'btn' + (i === 0 ? ' on' : '');
-  b.textContent = label;
-  b.onclick = () => {
-    viewsEl.querySelectorAll('.btn').forEach(x => x.classList.remove('on'));
-    b.classList.add('on');
-    flyTo(az, el, factor);
-  };
-  viewsEl.appendChild(b);
-});
-
+// The named-view buttons are gone; the mouse drives the camera. This block
+// used to build them from a VIEWS table of [label, azimuth, elevation, framing
+// factor] rows, and flyTo() below is kept because the number keys still use it.
+//
+// Worth keeping in the history: az 90 is the FRONT and az 270 the REAR, and
+// the two were swapped in this file exactly as they were in
+// blender/render_views.py and blender/ortho_measure.py - each with a comment
+// asserting the opposite convention, which is what made the error look
+// deliberate. The symptom was the 背面 button flying to the smooth front
+// panel, so the one view that exists to show the ports and the perforated
+// field showed a blank face.
 /** The model's bounding-sphere radius, once it has loaded. */
 function modelRadius() {
   return boxSize ? boxSize.length() / 2 : 0.2;
@@ -319,11 +283,9 @@ function bindToggle(id, list) {
   el.onchange = () => list.forEach(o => { o.visible = el.checked; });
 }
 
-bindToggle('tGrille', parts.grille);
 bindToggle('tPorts', parts.ports);
 bindToggle('tFeet', parts.feet);
 
-document.getElementById('tGrid').onchange = e => { grid.visible = e.target.checked; };
 document.getElementById('tWire').onchange = e => { wireGroup.visible = e.target.checked; };
 
 // ---------------------------------------------------------------- clipping
@@ -391,17 +353,15 @@ document.getElementById('reset').onclick = () => {
   ['rough', 'metal', 'env', 'exposure'].forEach(id => {
     document.getElementById(id).dispatchEvent(new Event('input'));
   });
-  ['tGrille', 'tPorts', 'tFeet', 'tGrid', 'tWire', 'clipOn']
-    .forEach(id => { document.getElementById(id).checked = (id === 'tGrille' || id === 'tPorts' || id === 'tFeet'); });
-  parts.grille.concat(parts.ports, parts.feet).forEach(o => { o.visible = true; });
-  grid.visible = false;
+  ['tPorts', 'tFeet', 'tWire', 'clipOn']
+    .forEach(id => { document.getElementById(id).checked = (id === 'tPorts' || id === 'tFeet'); });
+  parts.ports.concat(parts.feet).forEach(o => { o.visible = true; });
   wireGroup.visible = false;
   clipEnabled = false;
   clipPos.value = 0;
   applyClip();
   clipVal.textContent = '0.0 cm';
   flyTo(215, 28, 0.42);
-  viewsEl.querySelectorAll('.btn').forEach((x, i) => x.classList.toggle('on', i === 0));
 };
 
 // -------------------------------------------------------------------- loop
@@ -427,10 +387,5 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-// keyboard shortcuts
-addEventListener('keydown', e => {
-  if (e.key >= '1' && e.key <= '8') {
-    const b = viewsEl.children[+e.key - 1];
-    if (b) b.click();
-  }
-});
+// The number keys used to click the named-view buttons, which are gone. The
+// mouse drives the camera now.
