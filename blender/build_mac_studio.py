@@ -1625,28 +1625,61 @@ def build_front_io(mats, body):
     # inward, i.e. toward -Y
     y_mouth = y_face - 0.10
 
-    # THE CUTTER MISSED THE PANEL. cut_from_body() is given the cutter's CENTRE,
-    # and the front skin is at y = +D/2 = 9.85 with a 1.5 mm wall. The centre was
-    # y_face + 0.20 = 10.05 with a 0.60 total depth, so the cutter occupied
-    # y 9.75..10.35: it reached 0.10 mm past the skin and stopped, ten times
-    # short of the 1.5 mm it needed. Nothing was opened.
+    # THE CUTTER MISSED THE PANEL - TWICE, and the first fix was another one of
+    # the same. cut_from_body() takes the cutter's CENTRE.
     #
-    # Measured on the built shell, the front panel in the port strip (x -7.5 to
-    # -1.0, z 1.8 to 2.9) carried 17 faces larger than 0.05 cm2, the biggest
-    # 4.83 cm2, over a strip whose whole area is 7.15 cm2. Those are the panels
-    # the sockets were never cut out of, and the sockets themselves are separate
-    # geometry sitting just inside a closed skin - so the ports rendered as
-    # flat metal with a bright edge, which is what the viewer showed.
+    # First attempt, before d5fd74e: the centre was y_face + 0.20 = 10.05 with
+    # a 0.60 total depth, so the cutter occupied y 9.75..10.35. It reached 0.10
+    # mm past the skin and stopped, ten times short of the 1.5 mm it needed.
     #
-    # The cutter now spans from outside the skin to past the wall, the same
-    # arrangement the grille fields use: it starts in free air in front of the
-    # panel and ends inside the cavity, so neither cap lands on a face.
-    span_in = WALL + 0.45
+    # d5fd74e's fix, which is the one that shipped: span_in = WALL + 0.45,
+    # centred at y_face - span_in / 2.0, so the cutter spans
+    # y 9.25..9.85. That crosses the wall - and lands its OUTER CAP EXACTLY ON
+    # THE SKIN PLANE, to the last bit. The comment above the old line claimed
+    # "neither cap lands on a face", and the arithmetic says the opposite:
+    # the outer cap is at y_face by construction, because the total depth IS
+    # the span from the cap to the far end and the centre is half of it back.
+    #
+    # Why the earlier face census called this CUT: it measured the total area
+    # of the shell's faces over the port strip and compared it with the strip's
+    # area, and the boolean leaves the skin fragmented into thousands of small
+    # faces that together cover 88-97% of each port's footprint. Fragmented is
+    # not open. Two readings disagreed and the coverage number is the one that
+    # agrees with a ray:
+    #
+    #     USBC_1  0.4257 of 0.4830 cm2 covered  (88.1%)
+    #     USBC_2  0.4351 of 0.4935 cm2 covered  (88.2%)
+    #     SDXC    1.3268 of 1.3630 cm2 covered  (97.3%)
+    #
+    # and a ray down the middle of each port still stops on the shell at
+    # 0.00 mm inside the skin. On this shell a cap finishing in the skin's own
+    # plane is read as a pocket: the outer face is left in place.
+    # build_grilles() documents the same EXACT behaviour for the perforations,
+    # which is why those prisms reach half a centimetre past the wall.
+    #
+    # The fix is the grille arrangement, applied honestly: overshoot the skin
+    # by OUTSIDE so the near cap is in free air in FRONT of the panel, and reach
+    # CAVITY past the wall so the far cap is in the empty cavity BEHIND it.
+    # Neither cap can then coincide with a face. Verified on the real shell
+    # before editing this line (blender/try_front_cutter.py, nothing saved):
+    #
+    #     BEFORE   the SDXC footprint was 330/330 = 100% blocked at the skin
+    #     AFTER    the SDXC footprint was   0/330 =   0% blocked at the skin
+    #     ray down the middle now lands on Front_SDXC_tg 2.42 mm inside
+    #
+    OUTSIDE = 0.45
+    CAVITY = 0.45
+    span_cut = OUTSIDE + WALL + CAVITY
+    cy_cut = y_face + (OUTSIDE - (WALL + CAVITY)) / 2.0
     for name, x, w, h in FRONT_PORTS:
-        cut_from_body(body, "Front_" + name, x, y_face - span_in / 2.0, IO_Z,
-                      w + 0.20, span_in, h + 0.20, bevel=0.05, mats=mats)
-        # paint the recess black from the skin back to the socket's back plate
-        paint_recess_black(body, y_face - span_in - 0.02, y_face + 0.02,
+        cut_from_body(body, "Front_" + name, x, cy_cut, IO_Z,
+                      w + 0.20, span_cut, h + 0.20, bevel=0.05, mats=mats)
+        # Paint the recess black from the skin back to the socket's back plate.
+        # The band is the panel's own thickness, not the cutter's span: the
+        # recess the boolean leaves runs from the skin to the inner face, and
+        # the cutter now extends well past both, so painting out to span_cut
+        # would catch faces the cut did not create.
+        paint_recess_black(body, y_face - WALL - 0.02, y_face + 0.02,
                            abs(x) + w / 2.0 + 0.12, IO_Z - h / 2.0 - 0.12,
                            IO_Z + h / 2.0 + 0.12)
         # The socket's mouth sits just inside the panel and the body runs

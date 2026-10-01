@@ -17,6 +17,15 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 const viewport = document.getElementById('viewport');
 const loading = document.getElementById('loading');
 
+// The opening shot, in the vocabulary flyTo()/setViewImmediate() take:
+// azimuth, elevation, and a framing FACTOR (1 = fit the model exactly).
+// Declared once and used by both the initial framing and 重置, so the reset
+// button cannot end up restoring a different camera than the one the page
+// opens on - which it did, by passing a leftover metre distance as the factor.
+const OPENING_AZ = 215;
+const OPENING_EL = 28;
+const OPENING_FIT = 1.00;
+
 // ---------------------------------------------------------------- renderer
 // alpha:true and NO scene.background, so the canvas composites over the page
 // instead of painting an opaque colour of its own.
@@ -143,10 +152,13 @@ loader.load(
     const centre = box.getCenter(new THREE.Vector3());
     controls.target.set(centre.x, centre.y, centre.z);
     document.getElementById('dims').dataset.ready = '1';
-    // Frame the opening shot from the box we just measured, using the same
-    // fit every preset button uses. Without this the camera keeps whatever
-    // position it was constructed with, and that number predates the model.
-    setViewImmediate(215, 28, 1.00);
+    // Frame the opening shot from the box we just measured, using the same fit
+    // every view uses. Without this the camera keeps whatever position it was
+    // constructed with, and that number predates the model. These three values
+    // are the opening shot and nothing else; 重置 reuses them, because the reset
+    // button once passed a stale metre distance (0.42) where a framing factor
+    // belongs and quietly zoomed the camera to 42%.
+    setViewImmediate(OPENING_AZ, OPENING_EL, OPENING_FIT);
 
     root.traverse((o) => {
       if (!o.isMesh) return;
@@ -164,6 +176,15 @@ loader.load(
     console.log('[viewer] loaded', root.name,
       'size(cm)=', boxSize.clone().multiplyScalar(100).toArray().map(v => v.toFixed(2)));
     loading.style.display = 'none';
+    // A handle for tools/verify_front_ports.py. Every other check on this page
+    // reads the source, and the source cannot tell whether a panel has a hole
+    // in it - the GLB carries the right node names and the right materials
+    // whether the boolean cut or not, which is exactly why d5fd74e took a look
+    // at the page to find it and a5524c5 could not confirm the fix. A raycast
+    // from the camera through a port pixel, against the LOADED export, answers
+    // the question the screenshots were being asked.
+    window.__viewer = { scene, camera, renderer, controls, modelRoot, THREE, box, boxSize };
+    document.documentElement.dataset.viewerReady = '1';
     animate();
   },
   (evt) => {
@@ -217,16 +238,27 @@ function buildWireframe(root) {
 // ------------------------------------------------------------- camera views
 // azimuth (deg), elevation (deg), and a FRAMING FACTOR - not a distance.
 //
-// Convention, and this is the third file to get it backwards: the exported
-// GLB is +Y = FRONT (2x USB-C, SDXC, status LED) and -Y = REAR (the I/O row,
-// the exhaust field, the power button), so
-//   az  90 -> camera on +Y, looking at the FRONT
-//   az 270 -> camera on -Y, looking at the REAR
-// 正面 (front) and 背面 (rear) were swapped here exactly as they were in
-// blender/render_views.py and blender/ortho_measure.py, and the comment above
-// asserted the wrong convention, which is what made it look deliberate. The
-// symptom: the 背面 button flew to the smooth front panel, so the one view
-// that exists to show the ports and the perforated field showed a blank face.
+// AXES. The line this comment replaced said "the exported GLB is +Y = FRONT
+// (2x USB-C, SDXC, status LED) and -Y = REAR", and that is false of the file
+// that ships. Measured out of the exported accessors:
+//
+//   Front_*  (USB-C, SDXC, LED)  x -6.756..-1.097  y 1.925..2.775  z -9.75..-9.41
+//   Port_*   (the I/O row)       x -6.938.. 6.936  y 1.690..3.115  z  9.394..9.766
+//
+// so in the GLB the front is -Z, the rear is +Z, and Y is the machine's HEIGHT
+// axis. That is the standard Blender -> glTF conversion of a Z-up model:
+// (x, y, z)_blender maps to (x, z, -y)_gltf, and the builder works in Blender
+// space where the front skin is the +Y face at y = +D/2.
+//
+// An azimuth written against the old comment therefore aims the camera at the
+// ceiling. It has been wrong here, in blender/render_views.py and in
+// blender/ortho_measure.py - three files, each with a comment asserting the
+// opposite of the truth, which is what made the error look deliberate. The
+// symptom when the buttons existed: 背面 flew to the smooth front panel, so
+// the one view meant to show the ports showed a blank face.
+//
+// tools/verify_front_ports.py measures the front elevation off these
+// coordinates, which is why the ray probe and the export agree.
 //
 // The third column used to be an absolute distance in metres (0.36, 0.42...)
 // and every view was CROPPED: at a 38 deg vertical fov, 0.36 m gives a
@@ -393,7 +425,12 @@ document.getElementById('reset').onclick = () => {
   clipPos.value = 0;
   applyClip();
   clipVal.textContent = '0.0 cm';
-  flyTo(215, 28, 0.42);
+  // The opening framing, not a stray distance. This was flyTo(215, 28, 0.42),
+  // and 0.42 is the metre distance the view table used to hold - passed here as
+  // a FACTOR, so 重置 silently zoomed the camera to 42% of the fit instead of
+  // restoring the shot the page opens with. The other two numbers are the
+  // opening shot's, so all three now come from one place.
+  setViewImmediate(OPENING_AZ, OPENING_EL, OPENING_FIT);
 };
 
 // -------------------------------------------------------------------- loop

@@ -59,7 +59,7 @@ add('every mapped module exists on disk', absent.length === 0,
     absent.length ? absent.map(([s, v]) => `${s} -> ${v}`).join(' ')
                   : `${mapTargets.length} modules`);
 
-// 2c. the camera presets must not crop the model.
+// 2c. the camera framing must be derived from the model, not hardcoded.
 //
 // The third column of VIEWS was an absolute distance in metres, tuned when
 // the export was 84 meshes. At the 84-mesh stage 0.36 m framed the body; with
@@ -71,32 +71,62 @@ add('every mapped module exists on disk', absent.length === 0,
 // number that would drift again.
 add('camera distance is derived from the model, not hardcoded',
     /fitDistance\s*\(/.test(src) && /modelRadius\s*\(/.test(src) &&
-    /setViewImmediate\(\.\.\.VIEWS\[0\]/.test(src),
+    /setViewImmediate\(\s*OPENING_AZ/.test(src),
     'fitDistance + modelRadius + initial view re-framed on load');
 
-// and the presets must all be framing FACTORS, not metre distances. A
-// distance in metres and a factor are both decimals, so a regex cannot tell
+// 2d. every framing value must be a FACTOR, and a factor near 1 means "fit".
+//
+// A distance in metres and a factor are both decimals, so a regex cannot tell
 // them apart and an earlier version of this check flagged the two close-up
 // factors (0.62, 0.68) as "hardcoded distances" while the real 0.36 m
-// distances passed. Assert the arithmetic instead: with the fit mechanism in
-// place, every preset's value must be a multiplier of a derived distance,
-// which is true by construction - so what is worth checking is that no
-// preset value is large enough to BE a metre distance for a 0.197 m object.
-const viewBody = (src.match(/const VIEWS\s*=\s*\[([\s\S]*?)\];/) || [, ''])[1];
-const presets = [...viewBody.matchAll(/['"]([^'"]+)['"]\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)/g)]
-  .map(m => ({ name: m[1], factor: parseFloat(m[4]) }));
-// A fit distance for this model works out to ~0.42 m, and the metre
-// distances that used to be hardcoded were 0.36 and 0.42. The real framing
-// factors are 1.00 (fit exactly) and 0.62 / 0.68 (crop a little for the
-// close-ups). So the band to reject is 0.70..0.99 - values too big to be a
-// deliberate crop and too small to be a distance that would have worked.
-const looksLikeMetres = presets.filter(p => p.factor > 0.69 && p.factor < 0.99);
-add('every preset is a framing factor, not a metre distance',
-    presets.length > 0 && looksLikeMetres.length === 0,
-    looksLikeMetres.length
-      ? looksLikeMetres.map(p => `${p.name}=${p.factor}`).join(' ')
-      : `${presets.length} presets: ` +
-        presets.map(p => `${p.name}=${p.factor}`).join(' '));
+// distances passed. What is worth checking is the arithmetic: a fit distance
+// for this model works out to ~0.42 m, and the metre distances the table used
+// to hold were 0.36 and 0.42 - the same value as a legitimate fit factor. So
+// assert the property that actually broke instead: the named constants the
+// camera is aimed with must be factors, and 重置 must reuse the opening shot
+// rather than passing a number of its own.
+//
+// The reset button called flyTo(215, 28, 0.42) - the 0.36/0.42 metre distance
+// from the deleted table, passed where a framing factor belongs, so 重置
+// zoomed the camera to 42% of the fit instead of restoring the opening view.
+// It read as a plausible decimal, which is why nothing caught it.
+//
+// Scan CODE, not comments: the comment that records the bug quotes the very
+// call this is looking for, and matching it would have kept the check red for
+// ever while the bug was fixed. Every line whose first non-space character is
+// / or * is dropped first.
+const code = src.split('\n')
+  .filter(l => !/^\s*(\/\/|\/\*|\*)/.test(l)).join('\n');
+// Every call that positions the camera, and the three arguments it was given.
+const framings = [...code.matchAll(/(?:flyTo|setViewImmediate)\(([^)]*)\)/g)]
+  .map(m => m[1].replace(/\s+/g, ' ').trim());
+// The check that actually works. An earlier version asserted only that
+// OPENING_FIT was DEFINED somewhere, and the mutant that replaced the reset
+// button's use of it with a literal 0.42 sailed straight through: the
+// constant was still defined, just unused. So assert on the CALLS - no
+// framing call may pass a bare decimal literal in the factor position, and
+// 重置 in particular must reuse the named shot.
+const literalFactors = framings.filter(f => /,\s*0?\.\d+\s*\)$/.test(f));
+const resetFrame = (code.match(/reset[\s\S]{0,900}?\n\};/) || [''])[0];
+const resetReuses = /OPENING_FIT/.test(resetFrame);
+const resetDetail = !resetReuses
+  ? '重置 does not use the opening shot'
+  : literalFactors.length
+    ? `a framing call passes a bare decimal: ${literalFactors.join(' | ')}`
+    : 'all framing calls are named';
+add('the reset button restores the opening shot, not a stale distance',
+    !literalFactors.length && resetReuses &&
+    /setViewImmediate\(\s*OPENING_AZ,\s*OPENING_EL,\s*OPENING_FIT\s*\)/.test(code) &&
+    /const OPENING_FIT = 1\.00/.test(code),
+    resetDetail);
+
+// the opening shot must be aimed with the model's REAL axes. The export is
+// Z-up converted: the front panel is at -Z and the height axis is Y, which
+// this file's own comments asserted backwards for three commits.
+const frontZ = (src.match(/Front_\*\s+\(USB-C[\s\S]{0,200}?z\s*(-?\d+\.\d+)\.\./) || [])[1];
+add('the front/rear axis convention matches the export',
+    /the front is -Z, the rear is \+Z/.test(src) && !!frontZ && frontZ.startsWith('-'),
+    frontZ ? `front face measured at z ${frontZ}` : 'no measured axis in the comment');
 
 // 3. clip planes are enabled on the renderer (three.js gates this)
 add('renderer.localClippingEnabled = true', /localClippingEnabled\s*=\s*true/.test(src));
@@ -131,16 +161,48 @@ add('loading progress cannot exceed 100%',
 add('loader has a hang timeout', /setTimeout\([\s\S]{0,200}45000/.test(src));
 
 // 6. the 8 named views exist
-const views = src.match(/const VIEWS = \[([\s\S]*?)\n\];/);
-const nViews = views ? (views[1].match(/\['/g) || []).length : 0;
-add('8 named camera views defined', nViews === 8, `found ${nViews}`);
+// 6. the view BUTTONS are gone, and nothing that drives them survived.
+// d574dcf removed the row of named-view buttons because the mouse already
+// orbits. This check used to assert "8 named camera views defined", so it went
+// red on the commit that deleted them and stayed red - a gate left red is a
+// gate nobody reads, and the two live bugs found next to it (the reset
+// button's 0.42, the backwards axis comment) sat behind it.
+//
+// Assert the shape the page is SUPPOSED to have now: no table, no buttons in
+// the markup, and the camera functions the render loop still needs.
+const viewTable = /const VIEWS\s*=/.test(src);
+const viewButtons = /data-view|VIEW_LABELS|onclick=.*flyTo/.test(src)
+                 || /<button[^>]*data-view/.test(html);
+add('the named-view table is gone, and nothing still drives it',
+    !viewTable && !viewButtons,
+    viewTable ? 'a VIEWS table is still defined' : 'no table, no buttons');
+add('the camera helpers the render loop needs are all present',
+    /function fitDistance\s*\(/.test(src) && /function flyTo\s*\(/.test(src) &&
+    /function setViewImmediate\s*\(/.test(src) && /let tween = null/.test(src),
+    'fitDistance + flyTo + setViewImmediate + tween');
 
-// 7. classify() covers the three toggle groups
+// 7. classify() covers the toggle groups the panel still offers.
+//
+// The grille toggle went away with the rest of the honeycomb UI, and the
+// perforated field is no longer separate geometry - it is cut into the shell
+// itself - so a "hide the grille" branch would now take a piece of the body
+// out of the machine. The remaining two groups are the ports and the feet.
 const cls = src.match(/function classify\(name\) \{([\s\S]*?)\n\}/);
 const clsBody = cls ? cls[1] : '';
-add('visibility classification covers grille/ports/feet',
-    /Grille/i.test(clsBody) && /Port_/.test(clsBody) && /Foot_/.test(clsBody),
+add('visibility classification covers ports/feet and no longer the grille',
+    /Port_/.test(clsBody) && /Front_/.test(clsBody) && /Foot_/.test(clsBody) &&
+    !/Grille/i.test(clsBody),
     clsBody.replace(/\s+/g, ' ').trim().slice(0, 90));
+
+// the panel must not still offer controls whose handler was deleted with the
+// feature - the markup and the JS have to agree about what exists
+const panelIds = [...html.matchAll(/<input[^>]*id="([\w-]+)"|<button[^>]*id="([\w-]+)"/g)]
+  .map(m => m[1] || m[2]);
+const deadControls = ['tGrille', 'tGrid', 'tViews', 'tFloor']
+  .filter(id => panelIds.includes(id) || new RegExp(`['"]${id}['"]`).test(src));
+add('no control markup survives for a feature that was removed',
+    deadControls.length === 0,
+    deadControls.length ? deadControls.join(' ') : `${panelIds.length} controls, all live`);
 
 // 8. the render loop actually starts
 add('animation loop started', /requestAnimationFrame\(animate\)/.test(src));

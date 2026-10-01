@@ -20,6 +20,11 @@ mac_studio.blend
 # stale on the next run.
 renders/compare/
 
+# Output of tools/verify_front_ports.py: the front-elevation screenshot the
+# ray probe takes, kept for the record beside the numbers it produced. A
+# screenshot of a claim, not a deliverable - the numbers are the verdict.
+renders/verify/
+
 # Scratch working directory: a throwaway Blender.app (973 MB), .bak copies,
 # compiled dylib and object-file debris from an injection probe, captured
 # stdout and ad-hoc probe scripts. Nothing in here is an input to anything,
